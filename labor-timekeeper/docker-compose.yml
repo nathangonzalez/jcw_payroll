@@ -1,0 +1,13 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - TIMEZONE=America/New_York
+      - PAYROLL_WEEK_START=1
+      - DATABASE_PATH=/app/data/app.db
+      - SESSION_TTL_HOURS=168
+    volumes:
+      - ./data:/app/data

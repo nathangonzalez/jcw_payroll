@@ -1,0 +1,252 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Labor Timekeeper</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="container">
+    <div class="row" style="align-items:center; justify-content:space-between;">
+      <div>
+        <h1>Log Hours</h1>
+        <div class="muted small" id="who"></div>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <a href="/admin" class="badge">Admin</a>
+        <button class="danger" id="logoutBtn" style="width:auto;">Logout</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <h2>This Week</h2>
+      <div class="muted small" id="weekLabel"></div>
+
+      <div class="row" style="margin-top:12px;">
+        <div class="col">
+          <label class="small muted">Customer</label>
+          <select id="customer"></select>
+        </div>
+        <div class="col">
+          <label class="small muted">Day</label>
+          <select id="day"></select>
+        </div>
+        <div class="col">
+          <label class="small muted">Hours</label>
+          <input id="hours" placeholder="e.g., 8" inputmode="decimal" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px;">
+        <div class="col"><button class="primary" id="saveBtn">Save / Update</button></div>
+        <div class="col"><button id="submitBtn">Submit Week</button></div>
+      </div>
+
+      <hr/>
+
+      <h2>🎤 Speak it</h2>
+      <p class="muted small">Example: “McGill 8 hours Friday” or “8 hours Friday McGill, 2 hours Saturday Hall”.</p>
+      <div class="row">
+        <div class="col"><button class="primary" id="recBtn">Start Recording</button></div>
+        <div class="col"><button id="applyVoiceBtn" disabled>Apply Parsed Entries</button></div>
+      </div>
+      <p class="muted small" id="voiceStatus"></p>
+      <div id="voiceBox" class="toast" style="display:none;">
+        <div class="small muted">Transcript</div>
+        <div id="transcript" style="margin:6px 0 10px 0;"></div>
+        <div class="small muted">Parsed entries</div>
+        <div id="parsed"></div>
+      </div>
+
+      <hr/>
+
+      <h2>Entries</h2>
+      <div id="entries"></div>
+    </div>
+  </div>
+
+<script>
+let ME=null, CUSTOMERS=[], WEEK=null;
+let mediaRecorder=null, chunks=[], lastParsed=null;
+
+function el(id){ return document.getElementById(id); }
+function fmt(n){ return (Math.round(n*100)/100).toString(); }
+
+async function api(url, opts){
+  const r = await fetch(url, opts);
+  if (r.status===401) location.href='/';
+  const j = await r.json().catch(()=>null);
+  if (!r.ok) throw new Error((j && j.error) || 'Request failed');
+  return j;
+}
+
+async function init(){
+  ME = await api('/api/me');
+  el('who').textContent = `Logged in as ${ME.name}`;
+
+  CUSTOMERS = await api('/api/customers');
+  el('customer').innerHTML = CUSTOMERS.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
+
+  const week = await api('/api/time-entries');
+  WEEK = week;
+  el('weekLabel').textContent = `Week starting ${week.week_start}`;
+  el('day').innerHTML = week.days.map(d=>`<option value="${d.ymd}">${d.dow} (${d.ymd})</option>`).join('');
+  renderEntries(week.entries);
+
+  el('saveBtn').onclick = saveEntry;
+  el('submitBtn').onclick = submitWeek;
+  el('logoutBtn').onclick = logout;
+
+  await setupRecorder();
+}
+
+function renderEntries(entries){
+  if (!entries.length){
+    el('entries').innerHTML = '<p class="muted">No entries yet.</p>';
+    return;
+  }
+  const rows = entries.map(e=>{
+    const badge = e.status==='APPROVED'
+      ? '<span class="badge">APPROVED</span>'
+      : e.status==='SUBMITTED'
+        ? '<span class="badge">SUBMITTED</span>'
+        : '<span class="badge">DRAFT</span>';
+    return `<tr>
+      <td>${e.work_date}</td>
+      <td>${e.customer_name}</td>
+      <td>${fmt(Number(e.hours))}</td>
+      <td>${badge}</td>
+    </tr>`;
+  }).join('');
+  el('entries').innerHTML = `
+    <table>
+      <thead><tr><th>Date</th><th>Customer</th><th>Hours</th><th>Status</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+async function refresh(){
+  const week = await api('/api/time-entries');
+  WEEK = week;
+  renderEntries(week.entries);
+}
+
+async function saveEntry(){
+  const customer_id = el('customer').value;
+  const work_date = el('day').value;
+  const hours = parseFloat(el('hours').value);
+  if (!customer_id || !work_date || !isFinite(hours)) { alert('Pick customer/day and enter hours'); return; }
+  await api('/api/time-entries', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({customer_id, work_date, hours})
+  });
+  el('hours').value='';
+  await refresh();
+}
+
+async function submitWeek(){
+  await api('/api/submit-week', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({week_start: WEEK.week_start})
+  });
+  alert('Submitted!');
+  await refresh();
+}
+
+async function logout(){
+  await fetch('/api/logout', { method:'POST' });
+  location.href='/';
+}
+
+async function setupRecorder(){
+  const recBtn = el('recBtn');
+  const applyBtn = el('applyVoiceBtn');
+
+  applyBtn.onclick = applyParsed;
+
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+
+    mediaRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+
+    mediaRecorder.onstop = async () => {
+      try{
+        el('voiceStatus').textContent = 'Processing...';
+        const blob = new Blob(chunks, { type:'audio/webm' });
+        const fd = new FormData();
+        fd.append('audio', blob, 'command.webm');
+        const result = await api('/api/voice/command', { method:'POST', body: fd });
+        showVoiceResult(result);
+      } catch(err){
+        el('voiceStatus').textContent = err.message;
+      }
+    };
+
+    recBtn.onclick = () => {
+      if (mediaRecorder.state === 'inactive'){
+        chunks = [];
+        mediaRecorder.start();
+        recBtn.textContent = 'Stop Recording';
+        el('voiceStatus').textContent = 'Recording...';
+        applyBtn.disabled = true;
+        lastParsed = null;
+      } else {
+        mediaRecorder.stop();
+        recBtn.textContent = 'Start Recording';
+      }
+    };
+  } catch(e){
+    el('voiceStatus').textContent = 'Microphone permission denied or unsupported browser.';
+    recBtn.disabled = true;
+  }
+}
+
+function showVoiceResult(result){
+  el('voiceStatus').textContent = '';
+  el('voiceBox').style.display = 'block';
+  el('transcript').textContent = result.transcript || '';
+  const entries = result.parsed?.entries || [];
+  lastParsed = entries;
+
+  el('parsed').innerHTML = entries.map((e)=>{
+    const warn = e.customer_id
+      ? ''
+      : ' <span class="badge" style="border-color:rgba(255,107,107,.4); color:#ffb3b3;">needs customer match</span>';
+    return `<div style="margin:6px 0;">
+      <strong>${e.work_date}</strong> — ${e.customer_name} — ${fmt(Number(e.hours))} hrs${warn}
+    </div>`;
+  }).join('') || '<div class="muted">No entries parsed.</div>';
+
+  el('applyVoiceBtn').disabled = entries.length === 0 || entries.some(e=>!e.customer_id);
+}
+
+async function applyParsed(){
+  if (!lastParsed?.length) return;
+  for (const e of lastParsed){
+    await api('/api/time-entries', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        customer_id: e.customer_id,
+        work_date: e.work_date,
+        hours: e.hours,
+        notes: e.notes || ''
+      })
+    });
+  }
+  alert('Applied!');
+  await refresh();
+}
+
+init().catch(e=>{
+  console.error(e);
+  alert(e.message || 'Failed to load');
+});
+</script>
+
+</body>
+</html>

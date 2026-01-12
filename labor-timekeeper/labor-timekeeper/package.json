@@ -1,0 +1,29 @@
+{
+  "name": "labor-timekeeper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch server.js",
+    "start": "node server.js",
+    "seed": "node scripts/seed.js",
+    "export:monthly": "node scripts/export_monthly.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.6.0",
+    "cookie-parser": "^1.4.6",
+    "date-fns": "^3.6.0",
+    "date-fns-tz": "^3.1.3",
+    "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
+    "express": "^4.19.2",
+    "fuse.js": "^7.0.0",
+    "helmet": "^7.1.0",
+    "morgan": "^1.10.0",
+    "multer": "^1.4.5-lts.1",
+    "nanoid": "^5.0.7",
+    "openai": "^4.56.0",
+    "zod": "^3.23.8"
+  }
+}

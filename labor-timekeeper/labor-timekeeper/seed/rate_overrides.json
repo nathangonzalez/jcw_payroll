@@ -1,0 +1,112 @@
+[
+  {
+    "customer_name": "Bryan",
+    "employee_name": "Chris J",
+    "bill_rate": 90.0
+  },
+  {
+    "customer_name": "Bryan",
+    "employee_name": "Chris Z",
+    "bill_rate": 90.0
+  },
+  {
+    "customer_name": "Howard",
+    "employee_name": "Chris J",
+    "bill_rate": 90.0
+  },
+  {
+    "customer_name": "Howard",
+    "employee_name": "Chris Z",
+    "bill_rate": 90.0
+  },
+  {
+    "customer_name": "Landy",
+    "employee_name": "Chris J",
+    "bill_rate": 90.0
+  },
+  {
+    "customer_name": "Landy",
+    "employee_name": "Chris Z",
+    "bill_rate": 90.0
+  },
+  {
+    "customer_name": "Lynn",
+    "employee_name": "Chris J",
+    "bill_rate": 90.0
+  },
+  {
+    "customer_name": "Lynn",
+    "employee_name": "Chris Z",
+    "bill_rate": 90.0
+  },
+  {
+    "customer_name": "McGill",
+    "employee_name": "Chris J",
+    "bill_rate": 90.0
+  },
+  {
+    "customer_name": "McGill",
+    "employee_name": "Chris Z",
+    "bill_rate": 90.0
+  },
+  {
+    "customer_name": "Richer",
+    "employee_name": "Chris J",
+    "bill_rate": 90.0
+  },
+  {
+    "customer_name": "Richer",
+    "employee_name": "Chris Z",
+    "bill_rate": 90.0
+  },
+  {
+    "customer_name": "Stahel",
+    "employee_name": "Chris J",
+    "bill_rate": 85.0
+  },
+  {
+    "customer_name": "Stahel",
+    "employee_name": "Chris Z",
+    "bill_rate": 90.0
+  },
+  {
+    "customer_name": "Sweeney",
+    "employee_name": "Chris J",
+    "bill_rate": 85.0
+  },
+  {
+    "customer_name": "Sweeney",
+    "employee_name": "Chris Z",
+    "bill_rate": 85.0
+  },
+  {
+    "customer_name": "Tercek",
+    "employee_name": "Chris J",
+    "bill_rate": 90.0
+  },
+  {
+    "customer_name": "Tercek",
+    "employee_name": "Chris Z",
+    "bill_rate": 90.0
+  },
+  {
+    "customer_name": "Ueltschi",
+    "employee_name": "Chris J",
+    "bill_rate": 85.0
+  },
+  {
+    "customer_name": "Ueltschi",
+    "employee_name": "Chris Z",
+    "bill_rate": 85.0
+  },
+  {
+    "customer_name": "Watkins",
+    "employee_name": "Chris J",
+    "bill_rate": 90.0
+  },
+  {
+    "customer_name": "Watkins",
+    "employee_name": "Chris Z",
+    "bill_rate": 90.0
+  }
+]

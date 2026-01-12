@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Labor Timekeeper - Login</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <h1>Labor Timekeeper</h1>
+      <p class="muted">Log hours by day and customer. Voice optional.</p>
+      <div class="row">
+        <div class="col">
+          <label class="small muted">Employee</label>
+          <input id="name" placeholder="e.g., Chris Jacobi" />
+        </div>
+        <div class="col">
+          <label class="small muted">PIN</label>
+          <input id="pin" placeholder="4 digits" inputmode="numeric" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px;">
+        <div class="col"><button class="primary" id="loginBtn">Login</button></div>
+        <div class="col"><a class="muted" href="/admin">Admin</a></div>
+      </div>
+      <p id="msg" class="muted"></p>
+      <hr/>
+      <p class="muted small">Seed test users: Chris Jacobi (1111), Chris Z (2222), Office Admin (9999)</p>
+    </div>
+  </div>
+
+<script>
+async function login() {
+  const name = document.getElementById('name').value.trim();
+  const pin = document.getElementById('pin').value.trim();
+  const msg = document.getElementById('msg');
+  msg.textContent = '';
+  const r = await fetch('/api/login', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({name, pin})
+  });
+  const j = await r.json().catch(()=>({}));
+  if (!r.ok) { msg.textContent = j.error || 'Login failed'; return; }
+  location.href = '/app';
+}
+document.getElementById('loginBtn').addEventListener('click', login);
+document.getElementById('pin').addEventListener('keydown', (e)=>{ if(e.key==='Enter') login(); });
+</script>
+</body>
+</html>
