@@ -27,9 +27,10 @@ export async function generateWeeklyExports({ db, weekStart }) {
   endDate.setDate(endDate.getDate() + 6);
   const weekEnd = formatYmd(endDate);
 
-  // Create output directory: /exports/<YYYY-MM>/<weekStart>/
+  // Create output directory (use /tmp in production for App Engine)
+  const baseDir = process.env.NODE_ENV === 'production' ? '/tmp/exports' : './exports';
   const monthDir = weekStart.slice(0, 7);
-  const outputDir = path.resolve(`./exports/${monthDir}/${weekStart}`);
+  const outputDir = path.resolve(`${baseDir}/${monthDir}/${weekStart}`);
   ensureDir(outputDir);
 
   // Query all approved entries for the week, grouped by employee

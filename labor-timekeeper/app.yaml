@@ -1,0 +1,50 @@
+# Google Cloud App Engine Configuration
+# Deploy with: gcloud app deploy
+
+runtime: nodejs22
+service: labor-timekeeper
+
+instance_class: F1
+
+env_variables:
+  NODE_ENV: "production"
+  DATABASE_PATH: "/tmp/app.db"
+  GCS_BUCKET: "jcw-labor-timekeeper"
+  SMTP_HOST: "smtp.office365.com"
+  SMTP_PORT: "587"
+  EMAIL_TO: "nathan@jcwelton.com"
+
+# Secrets from Google Secret Manager
+# Create secrets first:
+#   gcloud secrets create SMTP_USER --data-file=-
+#   gcloud secrets create SMTP_PASS --data-file=-
+#   gcloud secrets create OPENAI_API_KEY --data-file=-
+# Grant access:
+#   gcloud secrets add-iam-policy-binding SMTP_USER --member="serviceAccount:jcw-2-android-estimator@appspot.gserviceaccount.com" --role="roles/secretmanager.secretAccessor"
+
+# Auto-scaling settings
+automatic_scaling:
+  min_instances: 0
+  max_instances: 2
+  target_cpu_utilization: 0.65
+
+# Handlers
+handlers:
+  - url: /.*
+    script: auto
+    secure: always
+
+# Health check
+liveness_check:
+  path: "/api/health"
+  check_interval_sec: 30
+  timeout_sec: 4
+  failure_threshold: 2
+  success_threshold: 2
+
+readiness_check:
+  path: "/api/health"
+  check_interval_sec: 5
+  timeout_sec: 4
+  failure_threshold: 2
+  success_threshold: 2

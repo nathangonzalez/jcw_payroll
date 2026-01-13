@@ -1,0 +1,17 @@
+# Ignore for deployment
+node_modules/
+.env
+.env.*
+*.db
+*.db-wal
+*.db-shm
+data/
+exports/
+test-results/
+playwright-report/
+*.log
+.git/
+.gitignore
+*.md
+tests/
+scripts/simulate*.js

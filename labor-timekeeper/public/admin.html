@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,7 +7,19 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <div class="container">
+  <!-- PIN Gate -->
+  <div id="pinGate" class="container" style="margin-top:50px;">
+    <div class="card" style="max-width:300px; margin:0 auto; text-align:center;">
+      <h2>🔒 Admin Access</h2>
+      <p class="muted small">Enter PIN to continue</p>
+      <input id="pinInput" type="password" inputmode="numeric" maxlength="4" placeholder="****" style="font-size:1.5rem; text-align:center; letter-spacing:8px; padding:12px;" />
+      <button id="pinBtn" class="primary" style="margin-top:12px; width:100%;">Unlock</button>
+      <p id="pinError" class="small" style="color:#e74c3c; margin-top:8px; display:none;">Incorrect PIN</p>
+    </div>
+  </div>
+
+  <!-- Admin Content (hidden until PIN verified) -->
+  <div id="adminContent" class="container" style="display:none;">
     <div class="row" style="align-items:center; justify-content:space-between;">
       <h1>Admin</h1>
       <a href="/app" class="badge">Employee view</a>
@@ -30,12 +42,11 @@
 
       <div class="row" style="margin-top:12px;">
         <div class="col"><button id="approveBtn" class="primary">Approve Selected</button></div>
-        <div class="col"><button id="exportMonthBtn">Export Monthly Summary</button></div>
       </div>
 
       <hr/>
 
-      <h2>📊 Payroll XLSX Pipeline</h2>
+      <h2>📊 Payroll Reports</h2>
       <div class="row">
         <div class="col">
           <label class="small muted">Week Start</label>
@@ -47,9 +58,8 @@
         </div>
       </div>
       <div class="row" style="margin-top:12px; gap:8px;">
-        <button id="genWeekBtn" class="primary">Generate Weekly (per Employee)</button>
-        <button id="genMonthBtn" class="primary">Generate Monthly Breakdown</button>
-        <button id="genBothBtn" style="background:#2ecc71;">Generate Both</button>
+        <button id="genWeekBtn" class="primary">⬇️ Weekly Report (per Employee)</button>
+        <button id="genMonthBtn" class="primary">⬇️ Monthly Breakdown</button>
       </div>
       <div id="pipelineResult" style="margin-top:12px; padding:10px; background:#f8f9fa; border-radius:4px; display:none;">
         <pre id="pipelineOutput" style="margin:0; white-space:pre-wrap; font-size:12px;"></pre>
@@ -57,46 +67,67 @@
 
       <hr/>
 
-      <h2>🗑️ Close Month (Retention Policy)</h2>
+      <h2>✅ Reconcile Payroll</h2>
       <div class="row">
         <div class="col">
-          <label class="small muted">Month to Close</label>
+          <label class="small muted">Month to Reconcile</label>
           <input id="closeMonth" placeholder="YYYY-MM" />
         </div>
         <div class="col">
           <label class="small muted">&nbsp;</label>
-          <button id="closeMonthBtn" style="background:#e74c3c; color:white;">Close & Delete Entries</button>
+          <button id="previewReconcileBtn" style="background:#3498db; color:white;">Preview</button>
+          <button id="closeMonthBtn" style="background:#e74c3c; color:white;">Reconcile & Clear</button>
         </div>
       </div>
-      <p class="muted small">⚠️ This permanently deletes all time entries for the specified month.</p>
-
-      <hr/>
-
-      <h2>Invoice Export</h2>
-      <div class="row">
-        <div class="col">
-          <label class="small muted">Customer</label>
-          <select id="customer"></select>
-        </div>
-        <div class="col">
-          <label class="small muted">Start</label>
-          <input id="start" placeholder="YYYY-MM-DD" />
-        </div>
-        <div class="col">
-          <label class="small muted">End</label>
-          <input id="end" placeholder="YYYY-MM-DD" />
-        </div>
-      </div>
-      <div class="row" style="margin-top:12px;">
-        <div class="col"><button id="exportInvoiceBtn" class="primary">Download Invoice Workbook</button></div>
-      </div>
+      <p class="muted small">Archives data to cloud storage then clears entries. Only keep 1 month of active data.</p>
 
       <p class="muted small" id="msg"></p>
     </div>
   </div>
+</div>
 
 <script>
+const ADMIN_PIN = '7707';
+const PIN_KEY = 'labor_timekeeper_admin_auth';
+
 function el(id){ return document.getElementById(id); }
+
+// PIN Gate Logic
+function checkPin() {
+  const saved = sessionStorage.getItem(PIN_KEY);
+  if (saved === 'verified') {
+    showAdmin();
+    return true;
+  }
+  return false;
+}
+
+function showAdmin() {
+  el('pinGate').style.display = 'none';
+  el('adminContent').style.display = 'block';
+  init();
+}
+
+function verifyPin() {
+  const pin = el('pinInput').value;
+  if (pin === ADMIN_PIN) {
+    sessionStorage.setItem(PIN_KEY, 'verified');
+    showAdmin();
+  } else {
+    el('pinError').style.display = 'block';
+    el('pinInput').value = '';
+    el('pinInput').focus();
+  }
+}
+
+// Set up PIN handlers
+el('pinBtn').onclick = verifyPin;
+el('pinInput').onkeydown = (e) => { if (e.key === 'Enter') verifyPin(); };
+
+// Check if already authenticated
+if (!checkPin()) {
+  el('pinInput').focus();
+}
 
 async function api(url, opts){
   const r = await fetch(url, opts);
@@ -108,19 +139,13 @@ async function api(url, opts){
 let submittedCache=[];
 
 async function init(){
-
-  const customers = await api('/api/customers');
-  el('customer').innerHTML = customers.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
-
   el('loadBtn').onclick = loadSubmitted;
   el('approveBtn').onclick = approveSelected;
-  el('exportMonthBtn').onclick = exportMonth;
-  el('exportInvoiceBtn').onclick = exportInvoice;
 
-  // Pipeline buttons
-  el('genWeekBtn').onclick = generateWeekly;
-  el('genMonthBtn').onclick = generateMonthlyBreakdown;
-  el('genBothBtn').onclick = generateBoth;
+  // Report download buttons
+  el('genWeekBtn').onclick = downloadWeekly;
+  el('genMonthBtn').onclick = downloadMonthly;
+  el('previewReconcileBtn').onclick = previewReconcile;
   el('closeMonthBtn').onclick = closeMonth;
 
   // Set default values for pipeline inputs
@@ -137,78 +162,62 @@ async function init(){
   renderSubmitted(data.submitted);
 }
 
-// Pipeline functions
-async function generateWeekly() {
+// Report download functions
+async function downloadWeekly() {
   const week_start = el('pipelineWeek').value.trim();
   if (!week_start) { alert('Enter week start date'); return; }
   try {
     showPipelineResult('Generating weekly exports...');
     const result = await api(`/api/admin/generate-week?week_start=${encodeURIComponent(week_start)}`);
-    const output = [
-      `✅ Weekly Export Complete`,
-      `Week: ${result.weekStart}`,
-      `Output: ${result.outputDir}`,
-      ``,
-      `Files Generated (${result.files.length}):`,
-      ...result.files.map(f => `  • ${f.filename}: ${f.hours}hrs ($${f.amount}) [${f.category}]`),
-      ``,
-      `Totals:`,
-      `  Hours: ${result.totals.totalHours} (${result.totals.totalRegular} reg + ${result.totals.totalOT} OT)`,
-      `  Amount: $${result.totals.totalAmount}`,
-    ].join('\n');
-    showPipelineResult(output);
+    
+    if (result.files && result.files.length > 0) {
+      const output = [
+        `✅ Weekly Export Complete`,
+        `Week: ${result.weekStart}`,
+        ``,
+        `Files Generated (${result.files.length}):`,
+        ...result.files.map(f => `  • ${f.filename}: ${f.hours}hrs ($${f.amount})`),
+        ``,
+        `Total: ${result.totals.totalHours} hours, $${result.totals.totalAmount}`,
+        ``,
+        `Files saved to: ${result.outputDir}`,
+      ].join('\n');
+      showPipelineResult(output);
+    } else {
+      showPipelineResult('No approved entries found for this week.');
+    }
   } catch (err) {
     showPipelineResult(`❌ Error: ${err.message}`);
   }
 }
 
-async function generateMonthlyBreakdown() {
+async function downloadMonthly() {
   const month = el('pipelineMonth').value.trim();
-  if (!month) { alert('Enter month'); return; }
-  try {
-    showPipelineResult('Generating monthly breakdown...');
-    const result = await api(`/api/admin/generate-month?month=${encodeURIComponent(month)}`);
-    const output = [
-      `✅ Monthly Export Complete`,
-      `Month: ${result.month}`,
-      `File: ${result.filename}`,
-      ``,
-      `Summary:`,
-      `  Customers: ${result.totals.customers}`,
-      `  Employees: ${result.totals.employees}`,
-      `  Grand Total: $${result.totals.grandTotal}`,
-    ].join('\n');
-    showPipelineResult(output);
-  } catch (err) {
-    showPipelineResult(`❌ Error: ${err.message}`);
-  }
+  if (!month) { alert('Enter month (YYYY-MM)'); return; }
+  // Directly download the file
+  window.location.href = `/api/export/monthly?month=${encodeURIComponent(month)}`;
 }
 
-async function generateBoth() {
+async function previewReconcile() {
+  const month = el('closeMonth').value.trim();
+  if (!month) { alert('Enter month to reconcile'); return; }
+  
   try {
-    showPipelineResult('Generating both weekly and monthly exports...');
-    
-    const week_start = el('pipelineWeek').value.trim();
-    const month = el('pipelineMonth').value.trim();
-    
-    const weekResult = week_start ? await api(`/api/admin/generate-week?week_start=${encodeURIComponent(week_start)}`) : null;
-    const monthResult = month ? await api(`/api/admin/generate-month?month=${encodeURIComponent(month)}`) : null;
-    
-    let output = '✅ Export Complete\n\n';
-    
-    if (weekResult) {
-      output += `WEEKLY (${weekResult.weekStart}):\n`;
-      output += `  Files: ${weekResult.files.length}\n`;
-      output += `  Hours: ${weekResult.totals.totalHours}\n`;
-      output += `  Amount: $${weekResult.totals.totalAmount}\n\n`;
-    }
-    
-    if (monthResult) {
-      output += `MONTHLY (${monthResult.month}):\n`;
-      output += `  File: ${monthResult.filename}\n`;
-      output += `  Grand Total: $${monthResult.totals.grandTotal}\n`;
-    }
-    
+    showPipelineResult('Loading preview...');
+    const result = await api('/api/admin/reconcile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ month, confirm: false })
+    });
+    const output = [
+      `📋 Reconciliation Preview for ${month}`,
+      ``,
+      `Entries to archive: ${result.entries}`,
+      `Total Hours: ${result.totalHours}`,
+      `Total Billed: $${result.totalBilled}`,
+      ``,
+      `Click "Reconcile & Clear" to archive and remove this data.`
+    ].join('\n');
     showPipelineResult(output);
   } catch (err) {
     showPipelineResult(`❌ Error: ${err.message}`);
@@ -217,22 +226,28 @@ async function generateBoth() {
 
 async function closeMonth() {
   const month = el('closeMonth').value.trim();
-  if (!month) { alert('Enter month to close'); return; }
+  if (!month) { alert('Enter month to reconcile'); return; }
   
-  const confirmed = confirm(`⚠️ WARNING: This will permanently delete ALL time entries for ${month}.\n\nAre you sure?`);
+  const confirmed = confirm(`⚠️ This will archive and clear ALL time entries for ${month}.\n\nData will be saved to cloud storage but removed from active database.\n\nContinue?`);
   if (!confirmed) return;
   
-  const doubleConfirm = confirm(`FINAL CONFIRMATION: Delete all entries for ${month}?`);
-  if (!doubleConfirm) return;
-  
   try {
-    showPipelineResult('Closing month...');
-    const result = await api('/api/admin/close-month', {
+    showPipelineResult('Archiving and clearing...');
+    const result = await api('/api/admin/reconcile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ month, confirm: true })
     });
-    showPipelineResult(`✅ ${result.message}`);
+    const output = [
+      `✅ Payroll Reconciled for ${month}`,
+      ``,
+      `Archived: ${result.archived} entries`,
+      `Total Hours: ${result.summary.totalHours}`,
+      `Total Billed: $${result.summary.totalBilled}`,
+      ``,
+      `Data has been archived and cleared from active database.`
+    ].join('\n');
+    showPipelineResult(output);
   } catch (err) {
     showPipelineResult(`❌ Error: ${err.message}`);
   }
@@ -255,15 +270,17 @@ function renderSubmitted(rows){
     el('submitted').innerHTML = '<p class="muted">No submitted entries.</p>';
     return;
   }
+  const totalHours = rows.reduce((sum, r) => sum + Number(r.hours), 0);
   const html = `
     <table>
       <thead><tr>
-        <th></th><th>Date</th><th>Employee</th><th>Customer</th><th>Hours</th>
+        <th><input type="checkbox" id="selectAll" title="Select All" /></th>
+        <th>Date</th><th>Employee</th><th>Customer</th><th>Hours</th>
       </tr></thead>
       <tbody>
         ${rows.map(r=>`
           <tr>
-            <td><input type="checkbox" data-id="${r.id}" /></td>
+            <td><input type="checkbox" class="entry-cb" data-id="${r.id}" /></td>
             <td>${r.work_date}</td>
             <td>${r.employee_name}</td>
             <td>${r.customer_name}</td>
@@ -271,35 +288,43 @@ function renderSubmitted(rows){
           </tr>
         `).join('')}
       </tbody>
+      <tfoot><tr style="font-weight:bold; background:#f0f0f0;">
+        <td></td><td colspan="3">Total (${rows.length} entries)</td><td>${totalHours}</td>
+      </tr></tfoot>
     </table>
   `;
   el('submitted').innerHTML = html;
+  
+  // Select All handler
+  el('selectAll').onchange = function() {
+    document.querySelectorAll('.entry-cb').forEach(cb => cb.checked = this.checked);
+  };
+  // Update Select All when individual boxes change
+  document.querySelectorAll('.entry-cb').forEach(cb => {
+    cb.onchange = updateSelectAllState;
+  });
+}
+
+function updateSelectAllState() {
+  const all = document.querySelectorAll('.entry-cb');
+  const checked = document.querySelectorAll('.entry-cb:checked');
+  const selectAll = el('selectAll');
+  if (selectAll) {
+    selectAll.checked = all.length > 0 && all.length === checked.length;
+    selectAll.indeterminate = checked.length > 0 && checked.length < all.length;
+  }
 }
 
 async function approveSelected(){
-  const ids = [...document.querySelectorAll('input[type=checkbox][data-id]:checked')].map(x=>x.getAttribute('data-id'));
+  const ids = [...document.querySelectorAll('.entry-cb:checked')].map(x=>x.getAttribute('data-id'));
   if (!ids.length) { alert('Select at least one.'); return; }
   await api('/api/approve', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ ids })
   });
-  alert('Approved!');
+  alert(`Approved ${ids.length} entries!`);
   await loadSubmitted();
-}
-
-function exportMonth(){
-  const d = new Date();
-  const ym = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
-  window.location.href = `/api/export/monthly?month=${encodeURIComponent(ym)}`;
-}
-
-function exportInvoice(){
-  const customer_id = el('customer').value;
-  const start = el('start').value.trim();
-  const end = el('end').value.trim();
-  if (!customer_id || !start || !end) { alert('Pick customer and start/end dates'); return; }
-  window.location.href = `/api/export/invoice?customer_id=${encodeURIComponent(customer_id)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
 }
 
 init().catch(e=>{

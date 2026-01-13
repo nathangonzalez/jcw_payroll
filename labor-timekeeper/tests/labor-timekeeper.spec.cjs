@@ -57,32 +57,25 @@ test.describe("Labor Timekeeper - Time Entry", () => {
     await page.waitForTimeout(300);
   });
 
-  test("customer input with datalist exists", async ({ page }) => {
-    await expect(page.locator("#customerName")).toBeVisible();
-    await expect(page.locator("#customerList")).toBeAttached();
+  test("customer select dropdown exists", async ({ page }) => {
+    await expect(page.locator("#customerSelect")).toBeVisible();
   });
 
-  test("customer suggestions include addresses", async ({ page }) => {
-    const options = await page.locator("#customerList option").allTextContents();
-    expect(options.length).toBeGreaterThan(0);
+  test("customer options include addresses", async ({ page }) => {
+    const options = await page.locator("#customerSelect option").allTextContents();
+    expect(options.length).toBeGreaterThan(1); // At least one customer + placeholder
     // Options should be in format "Name — Address"
     const hasAddress = options.some(opt => opt.includes(" — "));
     expect(hasAddress).toBe(true);
   });
 
-  test("typing customer shows address", async ({ page }) => {
-    await page.fill("#customerName", "McGill");
-    await page.locator("#customerName").dispatchEvent("change");
+  test("selecting customer shows address", async ({ page }) => {
+    // Find McGill option and select it by getting all options
+    const options = await page.locator("#customerSelect option").allTextContents();
+    const mcGillIndex = options.findIndex(opt => opt.includes("McGill"));
+    expect(mcGillIndex).toBeGreaterThan(0);
+    await page.selectOption("#customerSelect", { index: mcGillIndex });
     await expect(page.locator("#customerAddress")).toContainText("800 Beach Rd");
-  });
-
-  test("free-text customer entry allowed", async ({ page }) => {
-    const newCustomerName = "Test Customer " + Date.now();
-    await page.fill("#customerName", newCustomerName);
-    
-    const value = await page.locator("#customerName").inputValue();
-    expect(value).toBe(newCustomerName);
-    await expect(page.locator("#customerAddress")).toContainText("New customer");
   });
 
   test("day selector has weekday options", async ({ page }) => {
@@ -92,13 +85,19 @@ test.describe("Labor Timekeeper - Time Entry", () => {
 });
 
 test.describe("Labor Timekeeper - Admin Page", () => {
-  test("admin page loads without auth", async ({ page }) => {
+  test.beforeEach(async ({ page }) => {
     await page.goto(BASE + "/admin");
+    // Enter PIN to unlock admin page
+    await page.fill("#pinInput", "7707");
+    await page.click("#pinBtn");
+    await page.waitForTimeout(300);
+  });
+
+  test("admin page loads with PIN unlock", async ({ page }) => {
     await expect(page.locator("h1")).toContainText("Admin");
   });
 
   test("admin page shows pipeline buttons", async ({ page }) => {
-    await page.goto(BASE + "/admin");
     await expect(page.locator("#genWeekBtn")).toBeVisible();
     await expect(page.locator("#genMonthBtn")).toBeVisible();
   });

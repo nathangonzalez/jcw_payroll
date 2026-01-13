@@ -8,10 +8,16 @@ import path from "path";
 import { openDb, id } from "./lib/db.js";
 import { weekStartYMD, weekDates, todayYMD } from "./lib/time.js";
 import { transcribeAudio, parseVoiceCommand } from "./lib/voice.js";
-import { buildMonthlyWorkbook, buildInvoiceWorkbook } from "./lib/export_excel.js";
+import { buildMonthlyWorkbook } from "./lib/export_excel.js";
 import { generateWeeklyExports } from "./lib/export/generateWeekly.js";
 import { generateMonthlyExport } from "./lib/export/generateMonthly.js";
 import { getHolidaysForYear, getHolidaysInRange } from "./lib/holidays.js";
+import { sendMonthlyReport } from "./lib/email.js";
+import { archiveAndClearPayroll, listArchives } from "./lib/storage.js";
+import { loadSecrets } from "./lib/secrets.js";
+
+// Load secrets from Google Secret Manager in production
+await loadSecrets();
 
 const app = express();
 const db = openDb();
@@ -21,7 +27,9 @@ app.use(morgan("dev"));
 app.use(express.json({ limit: "2mb" }));
 app.use(express.static("public"));
 
-const upload = multer({ dest: "./data/uploads" });
+// Use /tmp for uploads in production (App Engine read-only filesystem)
+const uploadDir = process.env.NODE_ENV === 'production' ? '/tmp/uploads' : './data/uploads';
+const upload = multer({ dest: uploadDir });
 
 /** Health */
 app.get("/api/health", (req, res) => res.json({ ok: true, today: todayYMD() }));
@@ -170,38 +178,22 @@ app.get("/api/export/monthly", async (req, res) => {
   try {
     const month = String(req.query.month || "").trim(); // YYYY-MM
     if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: "month=YYYY-MM required" });
-    const monthYmd = `${month}-01`;
 
-    const wb = await buildMonthlyWorkbook({ db, monthYmd });
+    // Use the new generateMonthlyExport which has correct vertical format
+    const result = await generateMonthlyExport({ db, month });
+    
+    // Read the generated file and send it
+    const fileBuffer = fs.readFileSync(result.filepath);
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="Monthly Summary ${month}.xlsx"`);
-    await wb.xlsx.write(res);
-    res.end();
+    res.setHeader("Content-Disposition", `attachment; filename="${result.filename}"`);
+    res.send(fileBuffer);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: String(err?.message || err) });
   }
 });
 
-app.get("/api/export/invoice", async (req, res) => {
-  try {
-    const customerId = String(req.query.customer_id || "");
-    const start = String(req.query.start || "");
-    const end = String(req.query.end || "");
-    if (!customerId || !/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
-      return res.status(400).json({ error: "customer_id, start=YYYY-MM-DD, end=YYYY-MM-DD required" });
-    }
 
-    const wb = await buildInvoiceWorkbook({ db, customerId, startYmd: start, endYmd: end });
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="Invoice ${customerId} ${start} to ${end}.xlsx"`);
-    await wb.xlsx.write(res);
-    res.end();
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: String(err?.message || err) });
-  }
-});
 
 /** ============================================================
  *  Option A - Functional XLSX Pipeline Endpoints
@@ -373,6 +365,275 @@ app.post("/api/customers/find-or-create", (req, res) => {
     res.json({ ok: true, customer, created });
   } catch (err) {
     console.error("[find-or-create]", err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+/** Import exports back to DB */
+import { importWeeklyExport, importWeek, importMonth } from "./lib/import_excel.js";
+
+// Import a single weekly export file
+app.post("/api/import/file", async (req, res) => {
+  try {
+    const { filePath, dryRun = false, replace = false } = req.body;
+    if (!filePath) return res.status(400).json({ error: "filePath required" });
+    
+    const results = await importWeeklyExport(filePath, { dryRun, replace });
+    res.json({ ok: true, ...results });
+  } catch (err) {
+    console.error("[import/file]", err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+// Import all exports for a week
+app.post("/api/import/week", async (req, res) => {
+  try {
+    const { weekStart, dryRun = false, replace = false } = req.body;
+    if (!weekStart) return res.status(400).json({ error: "weekStart required (YYYY-MM-DD)" });
+    
+    const results = await importWeek(weekStart, { dryRun, replace });
+    res.json({ ok: true, ...results });
+  } catch (err) {
+    console.error("[import/week]", err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+// Import all exports for a month
+app.post("/api/import/month", async (req, res) => {
+  try {
+    const { yearMonth, dryRun = false, replace = false } = req.body;
+    if (!yearMonth) return res.status(400).json({ error: "yearMonth required (YYYY-MM)" });
+    
+    const results = await importMonth(yearMonth, { dryRun, replace });
+    res.json({ ok: true, ...results });
+  } catch (err) {
+    console.error("[import/month]", err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+// List available exports
+app.get("/api/exports", (req, res) => {
+  try {
+    const exportDir = path.resolve("exports");
+    if (!fs.existsSync(exportDir)) {
+      return res.json({ ok: true, months: [] });
+    }
+    
+    const months = fs.readdirSync(exportDir)
+      .filter(d => /^\d{4}-\d{2}$/.test(d))
+      .sort()
+      .reverse();
+    
+    const result = months.map(month => {
+      const monthDir = path.join(exportDir, month);
+      const weeks = fs.readdirSync(monthDir)
+        .filter(d => {
+          const fullPath = path.join(monthDir, d);
+          return fs.statSync(fullPath).isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(d);
+        })
+        .sort();
+      
+      const hasMonthly = fs.existsSync(path.join(monthDir, `Payroll_Breakdown_${month}.xlsx`));
+      
+      return { month, weeks, hasMonthly };
+    });
+    
+    res.json({ ok: true, exports: result });
+  } catch (err) {
+    console.error("[exports]", err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+/** Admin: Seed database (for production deployment) */
+app.post("/api/admin/seed", async (req, res) => {
+  try {
+    const seedPath = path.resolve("seed");
+    const customers = JSON.parse(fs.readFileSync(path.join(seedPath, "customers.json"), "utf-8"));
+    const employees = JSON.parse(fs.readFileSync(path.join(seedPath, "employees.json"), "utf-8"));
+    const overrides = JSON.parse(fs.readFileSync(path.join(seedPath, "rate_overrides.json"), "utf-8"));
+    
+    const now = new Date().toISOString();
+    
+    // Customers
+    const findCust = db.prepare("SELECT id, address FROM customers WHERE LOWER(name) = LOWER(?)");
+    const insertCust = db.prepare("INSERT INTO customers (id, name, address, created_at) VALUES (?, ?, ?, ?)");
+    const updateAddr = db.prepare("UPDATE customers SET address = ? WHERE id = ?");
+    
+    let custCount = 0;
+    for (const c of customers) {
+      const name = typeof c === 'string' ? c : c.name;
+      const address = typeof c === 'string' ? '' : (c.address || '');
+      const existing = findCust.get(name);
+      if (existing) {
+        if ((!existing.address || existing.address === '') && address) {
+          updateAddr.run(address, existing.id);
+        }
+      } else {
+        insertCust.run(id("cust_"), name, address, now);
+        custCount++;
+      }
+    }
+    
+    // Employees
+    const insertEmp = db.prepare(`
+      INSERT OR IGNORE INTO employees
+        (id, name, pin_hash, default_bill_rate, default_pay_rate, is_admin, aliases_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    
+    let empCount = 0;
+    for (const e of employees) {
+      const isAdmin = e.is_admin ? 1 : (e.role === 'admin' ? 1 : 0);
+      const result = insertEmp.run(
+        id("emp_"),
+        e.name,
+        "no-auth",
+        Number(e.default_bill_rate || 0),
+        Number(e.default_pay_rate || 0),
+        isAdmin,
+        JSON.stringify(e.aliases || []),
+        now
+      );
+      if (result.changes > 0) empCount++;
+    }
+    
+    // Rate overrides
+    const getEmp = db.prepare("SELECT id FROM employees WHERE name = ?");
+    const getCust = db.prepare("SELECT id FROM customers WHERE name = ?");
+    const upsertRate = db.prepare(`
+      INSERT INTO rate_overrides (id, employee_id, customer_id, bill_rate, created_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(employee_id, customer_id) DO UPDATE SET bill_rate=excluded.bill_rate
+    `);
+    
+    let rateCount = 0;
+    for (const o of overrides) {
+      const empName = o.employee_name === "Chris J" ? "Chris Jacobi" : o.employee_name;
+      const emp = getEmp.get(empName);
+      const cust = getCust.get(o.customer_name);
+      if (!emp || !cust) continue;
+      upsertRate.run(id("ro_"), emp.id, cust.id, Number(o.bill_rate), now);
+      rateCount++;
+    }
+    
+    res.json({ 
+      ok: true, 
+      seeded: { customers: custCount, employees: empCount, overrides: rateCount },
+      totals: {
+        customers: db.prepare("SELECT COUNT(*) as n FROM customers").get().n,
+        employees: db.prepare("SELECT COUNT(*) as n FROM employees").get().n,
+        overrides: db.prepare("SELECT COUNT(*) as n FROM rate_overrides").get().n
+      }
+    });
+  } catch (err) {
+    console.error("[admin/seed]", err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+/** Admin: Database stats */
+app.get("/api/admin/stats", (req, res) => {
+  try {
+    const stats = {
+      customers: db.prepare("SELECT COUNT(*) as n FROM customers").get().n,
+      employees: db.prepare("SELECT COUNT(*) as n FROM employees").get().n,
+      time_entries: db.prepare("SELECT COUNT(*) as n FROM time_entries").get().n,
+      rate_overrides: db.prepare("SELECT COUNT(*) as n FROM rate_overrides").get().n,
+      entries_by_status: db.prepare(`
+        SELECT status, COUNT(*) as count FROM time_entries GROUP BY status
+      `).all()
+    };
+    res.json({ ok: true, stats });
+  } catch (err) {
+    console.error("[admin/stats]", err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+/** Admin: Email monthly report */
+app.post("/api/admin/email-report", async (req, res) => {
+  try {
+    const { month, to } = req.body;
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({ error: "month required in YYYY-MM format" });
+    }
+    
+    // Generate the report
+    const result = await generateMonthlyExport({ db, month });
+    
+    // Send via email
+    await sendMonthlyReport({
+      month,
+      filepath: result.filepath,
+      filename: result.filename,
+      totals: result.totals,
+      to, // optional override, defaults to EMAIL_TO env var
+    });
+    
+    res.json({ 
+      ok: true, 
+      message: `Report emailed to ${to || process.env.EMAIL_TO}`,
+      totals: result.totals 
+    });
+  } catch (err) {
+    console.error("[admin/email-report]", err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+/** Admin: Reconcile payroll - archives and clears time entries for a month */
+app.post("/api/admin/reconcile", async (req, res) => {
+  try {
+    const { month, confirm } = req.body;
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) {
+      return res.status(400).json({ error: "month required in YYYY-MM format" });
+    }
+    
+    // Get preview of what will be archived
+    const preview = db.prepare(`
+      SELECT COUNT(*) as count, SUM(hours) as totalHours, SUM(hours * bill_rate) as totalBilled
+      FROM time_entries WHERE work_date LIKE ?
+    `).get(`${month}%`);
+    
+    if (!confirm) {
+      // Return preview without clearing
+      return res.json({
+        ok: true,
+        preview: true,
+        month,
+        entries: preview.count || 0,
+        totalHours: preview.totalHours || 0,
+        totalBilled: Math.round((preview.totalBilled || 0) * 100) / 100,
+        message: "Send confirm: true to archive and clear this data"
+      });
+    }
+    
+    // Archive and clear
+    const result = await archiveAndClearPayroll(db, month);
+    
+    res.json({
+      ok: true,
+      reconciled: true,
+      ...result,
+      message: `Archived and cleared ${result.cleared} entries for ${month}`
+    });
+  } catch (err) {
+    console.error("[admin/reconcile]", err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+/** Admin: List archived payroll months */
+app.get("/api/admin/archives", async (req, res) => {
+  try {
+    const archives = await listArchives();
+    res.json({ ok: true, archives });
+  } catch (err) {
+    console.error("[admin/archives]", err);
     res.status(500).json({ error: String(err?.message || err) });
   }
 });

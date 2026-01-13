@@ -52,54 +52,6 @@ export async function buildMonthlyWorkbook({ db, monthYmd }) {
   return workbook;
 }
 
-export async function buildInvoiceWorkbook({ db, customerId, startYmd, endYmd }) {
-  const workbook = new ExcelJS.Workbook();
-  const mat = workbook.addWorksheet("MATERIAL");
-  const labor = workbook.addWorksheet("LABOR");
-  const calc = workbook.addWorksheet("CALCULATOR");
-
-  const cust = db.prepare("SELECT name FROM customers WHERE id = ?").get(customerId);
-  const custName = cust?.name || "Customer";
-
-  // MATERIAL placeholder
-  mat.addRow(["Date","Item","Qty","Unit Cost","Total"]);
-  mat.getRow(1).font = { bold: true };
-
-  // LABOR
-  labor.addRow(["Date","Employee","Rate","Hours","Total"]);
-  labor.getRow(1).font = { bold: true };
-
-  const rows = db.prepare(`
-    SELECT te.work_date, te.hours, te.notes, e.id as employee_id, e.name as employee_name
-    FROM time_entries te
-    JOIN employees e ON e.id = te.employee_id
-    WHERE te.customer_id = ?
-      AND te.work_date >= ? AND te.work_date <= ?
-      AND te.status IN ('SUBMITTED','APPROVED')
-    ORDER BY te.work_date ASC
-  `).all(customerId, startYmd, endYmd);
-
-  let laborTotal = 0;
-  for (const r of rows) {
-    const rate = getBillRate(db, r.employee_id, customerId);
-    const total = Number(r.hours) * rate;
-    laborTotal += total;
-    labor.addRow([r.work_date, r.employee_name, rate, Number(r.hours), round2(total)]);
-  }
-
-  // CALCULATOR (simple)
-  const materialsTotal = 0;
-  calc.addRow([materialsTotal, "Materials Amount", "", custName.toUpperCase()]);
-  calc.addRow([round2(laborTotal), "Labor Amount", "", ""]);
-  calc.addRow([round2(materialsTotal + laborTotal), "Subtotal", "", ""]);
-  calc.addRow([round2((materialsTotal + laborTotal) * 0.1), "0.1", "", ""]);
-  calc.addRow([round2((materialsTotal + laborTotal) * 1.1), "Subtotal", "", ""]);
-  calc.addRow([round2((materialsTotal + laborTotal) * 1.1 * 0.05), "0.05", "", ""]);
-  calc.addRow([round2((materialsTotal + laborTotal) * 1.1 * 1.05), "Grand Total", "", ""]);
-
-  return workbook;
-}
-
 function nextMonth(ymd) {
   const [y,m,_] = ymd.split("-").map(Number);
   let ny = y, nm = m + 1;

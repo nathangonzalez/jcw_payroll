@@ -1,10 +1,15 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Timekeeper" />
   <title>Labor Timekeeper</title>
   <link rel="stylesheet" href="/styles.css" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
 </head>
 <body>
   <div class="container">
@@ -15,8 +20,8 @@
 
     <!-- Employee selector at top -->
     <div class="card" style="margin-top:12px; padding:12px;">
-      <label class="small muted">Who are you?</label>
-      <select id="employee" style="font-size:1.1rem; padding:8px;">
+      <label class="small muted" for="employee">Who are you?</label>
+      <select id="employee" title="Select employee" style="font-size:1.1rem; padding:8px;">
         <option value="">-- Select your name --</option>
       </select>
     </div>
@@ -27,17 +32,18 @@
 
       <div class="row" style="margin-top:12px;">
         <div class="col" style="flex:2;">
-          <label class="small muted">Customer</label>
-          <input id="customerName" list="customerList" placeholder="Type or select customer..." autocomplete="off" />
-          <datalist id="customerList"></datalist>
+          <label class="small muted" for="customerSelect">Customer</label>
+          <select id="customerSelect" title="Select customer" style="font-size:1rem; padding:8px;">
+            <option value="">-- Select customer --</option>
+          </select>
           <div id="customerAddress" class="small muted" style="margin-top:4px; font-style:italic;"></div>
         </div>
         <div class="col">
-          <label class="small muted">Day</label>
-          <select id="day"></select>
+          <label class="small muted" for="day">Day</label>
+          <select id="day" title="Select day"></select>
         </div>
         <div class="col">
-          <label class="small muted">Hours</label>
+          <label class="small muted" for="hours">Hours</label>
           <input id="hours" placeholder="e.g., 8" inputmode="decimal" />
         </div>
       </div>
@@ -90,7 +96,7 @@ async function api(url, opts){
 // Draft persistence
 function saveDraft() {
   const draft = {
-    customerName: el('customerName').value,
+    customerId: el('customerSelect').value,
     day: el('day').value,
     hours: el('hours').value,
     savedAt: new Date().toISOString()
@@ -118,7 +124,7 @@ function restoreDraft() {
   const hoursSinceSave = (Date.now() - savedAt.getTime()) / (1000 * 60 * 60);
   if (hoursSinceSave > 24) { clearDraft(); return; }
   
-  if (draft.customerName) el('customerName').value = draft.customerName;
+  if (draft.customerId) el('customerSelect').value = draft.customerId;
   if (draft.day) el('day').value = draft.day;
   if (draft.hours) el('hours').value = draft.hours;
   
@@ -158,15 +164,15 @@ async function init(){
     await loadWeek();
   };
 
-  // Load customers
+  // Load customers into select dropdown
   CUSTOMERS = await api('/api/customers');
-  el('customerList').innerHTML = CUSTOMERS.map(c => {
-    const label = c.address ? `${c.name} — ${c.address}` : c.name;
-    return `<option value="${c.name}" data-id="${c.id}" data-address="${c.address || ''}">${label}</option>`;
-  }).join('');
+  el('customerSelect').innerHTML = '<option value="">-- Select customer --</option>' + 
+    CUSTOMERS.map(c => {
+      const label = c.address ? `${c.name} — ${c.address}` : c.name;
+      return `<option value="${c.id}" data-name="${c.name}" data-address="${c.address || ''}">${label}</option>`;
+    }).join('');
 
-  el('customerName').addEventListener('input', updateCustomerAddress);
-  el('customerName').addEventListener('change', updateCustomerAddress);
+  el('customerSelect').addEventListener('change', updateCustomerAddress);
 
   // If employee already selected, load week
   if (EMPLOYEE) {
@@ -183,7 +189,7 @@ async function init(){
 
   restoreDraft();
 
-  ['customerName', 'day', 'hours'].forEach(id => {
+  ['customerSelect', 'day', 'hours'].forEach(id => {
     if (el(id)) {
       el(id).addEventListener('input', saveDraft);
       el(id).addEventListener('change', saveDraft);
@@ -244,12 +250,15 @@ function findCustomerByName(name) {
 }
 
 function updateCustomerAddress() {
-  const name = el('customerName').value;
-  const customer = findCustomerByName(name);
-  if (customer && customer.address) {
-    el('customerAddress').textContent = `📍 ${customer.address}`;
-  } else if (name.trim() && !customer) {
-    el('customerAddress').textContent = '(New customer - will be created)';
+  const select = el('customerSelect');
+  const selectedOption = select.options[select.selectedIndex];
+  if (selectedOption && selectedOption.value) {
+    const address = selectedOption.dataset.address;
+    if (address) {
+      el('customerAddress').textContent = `📍 ${address}`;
+    } else {
+      el('customerAddress').textContent = '';
+    }
   } else {
     el('customerAddress').textContent = '';
   }
@@ -258,28 +267,13 @@ function updateCustomerAddress() {
 async function saveEntry(){
   if (!EMPLOYEE) { alert('Please select your name first'); return; }
   
-  const customerName = el('customerName').value.trim();
+  const customer_id = el('customerSelect').value;
   const work_date = el('day').value;
   const hours = parseFloat(el('hours').value);
   
-  if (!customerName || !work_date || !isFinite(hours)) { 
-    alert('Enter customer name, pick a day, and enter hours'); 
+  if (!customer_id || !work_date || !isFinite(hours)) { 
+    alert('Select a customer, pick a day, and enter hours'); 
     return; 
-  }
-  
-  let customer = findCustomerByName(customerName);
-  let customer_id;
-  
-  if (customer) {
-    customer_id = customer.id;
-  } else {
-    const result = await api('/api/customers/find-or-create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: customerName })
-    });
-    if (!result.ok) { alert('Failed to create customer'); return; }
-    customer_id = result.customer.id;
   }
   
   await api('/api/time-entries', {
@@ -287,7 +281,7 @@ async function saveEntry(){
     headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ employee_id: EMPLOYEE.id, customer_id, work_date, hours })
   });
-  el('customerName').value = '';
+  el('customerSelect').value = '';
   el('hours').value = '';
   el('customerAddress').textContent = '';
   clearDraft();
@@ -313,16 +307,35 @@ async function setupRecorder(){
 
   try{
     const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
-    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+    
+    // Detect supported MIME type (Safari doesn't support webm)
+    let mimeType = 'audio/webm';
+    if (!MediaRecorder.isTypeSupported('audio/webm')) {
+      if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        mimeType = 'audio/mp4';
+      } else if (MediaRecorder.isTypeSupported('audio/aac')) {
+        mimeType = 'audio/aac';
+      } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+        mimeType = 'audio/ogg';
+      } else {
+        // Fallback - let browser choose
+        mimeType = undefined;
+      }
+    }
+    
+    const recorderOptions = mimeType ? { mimeType } : {};
+    mediaRecorder = new MediaRecorder(stream, recorderOptions);
+    const actualMime = mediaRecorder.mimeType || 'audio/webm';
 
     mediaRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
 
     mediaRecorder.onstop = async () => {
       try{
         el('voiceStatus').textContent = 'Processing...';
-        const blob = new Blob(chunks, { type:'audio/webm' });
+        const blob = new Blob(chunks, { type: actualMime });
+        const ext = actualMime.includes('mp4') ? 'mp4' : actualMime.includes('ogg') ? 'ogg' : 'webm';
         const fd = new FormData();
-        fd.append('audio', blob, 'command.webm');
+        fd.append('audio', blob, `command.${ext}`);
         const result = await api('/api/voice/command', { method:'POST', body: fd });
         showVoiceResult(result);
       } catch(err){
@@ -392,6 +405,13 @@ init().catch(e=>{
   console.error(e);
   alert(e.message || 'Failed to load');
 });
+
+// Register service worker for PWA
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js')
+    .then(() => console.log('SW registered'))
+    .catch(err => console.warn('SW registration failed:', err));
+}
 </script>
 
 </body>

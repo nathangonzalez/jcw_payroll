@@ -1,74 +1,13 @@
 [
-  {
-    "name": "Chris Jacobi",
-    "default_bill_rate": 100.0,
-    "default_pay_rate": 0.0,
-    "pin": "1111",
-    "is_admin": 0,
-    "aliases": [
-      "Chris J",
-      "Chris"
-    ]
-  },
-  {
-    "name": "Chris Z",
-    "default_bill_rate": 100.0,
-    "default_pay_rate": 0.0,
-    "pin": "2222",
-    "is_admin": 0,
-    "aliases": [
-      "Chris Z"
-    ]
-  },
-  {
-    "name": "Doug Kinsey",
-    "default_bill_rate": 65.0,
-    "default_pay_rate": 0.0,
-    "pin": "3333",
-    "is_admin": 0,
-    "aliases": [
-      "Doug"
-    ]
-  },
-  {
-    "name": "Jafid Osorio",
-    "default_bill_rate": 50.0,
-    "default_pay_rate": 0.0,
-    "pin": "3333",
-    "is_admin": 0,
-    "aliases": [
-      "Jafid"
-    ]
-  },
-  {
-    "name": "Jason Green",
-    "default_bill_rate": 75.0,
-    "default_pay_rate": 0.0,
-    "pin": "3333",
-    "is_admin": 0,
-    "aliases": [
-      "Jason"
-    ]
-  },
-  {
-    "name": "Sean Matthew",
-    "default_bill_rate": 40.0,
-    "default_pay_rate": 0.0,
-    "pin": "3333",
-    "is_admin": 0,
-    "aliases": [
-      "Sean"
-    ]
-  },
-  {
-    "name": "Office Admin",
-    "default_bill_rate": 0.0,
-    "default_pay_rate": 0.0,
-    "pin": "9999",
-    "is_admin": 1,
-    "aliases": [
-      "Admin",
-      "Office"
-    ]
-  }
+  {"name":"Chris Jacobi","pin":"1111","role":"admin"},
+  {"name":"Chris Zavesky","pin":"2222","role":"admin","aliases":["Chris Z","Chris Z."]},
+  {"name":"Boban Abbate","pin":"3333","role":"hourly"},
+  {"name":"Jason Green","pin":"4444","role":"hourly"},
+  {"name":"Thomas Brinson","pin":"5555","role":"hourly"},
+  {"name":"Phil Henderson","pin":"6666","role":"hourly"},
+  {"name":"Doug Kinsey","pin":"7777","role":"hourly"},
+  {"name":"Jafid Osorio","pin":"8888","role":"hourly"},
+  {"name":"Sean Matthew","pin":"9998","role":"hourly"},
+  {"name":"Omer Avila","pin":"1234","role":"hourly"},
+  {"name":"Eduardo Vasquez","pin":"5678","role":"hourly"}
 ]

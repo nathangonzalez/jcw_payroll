@@ -1,7 +1,6 @@
 import fs from "fs";
 import path from "path";
 import { openDb, id } from "../lib/db.js";
-import { hashPin } from "../lib/auth.js";
 
 const db = openDb();
 
@@ -51,7 +50,7 @@ db.transaction(() => {
     insertEmployee.run(
       id("emp_"),
       e.name,
-      hashPin(e.pin || "0000"),
+      "no-auth", // PIN not used - auth removed
       Number(e.default_bill_rate || 0),
       Number(e.default_pay_rate || 0),
       isAdmin,

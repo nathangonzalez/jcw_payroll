@@ -1,0 +1,94 @@
+# JCW Labor Timekeeper - Session Persistence
+# Last updated: January 13, 2026
+
+## PROJECT OVERVIEW
+Construction crew time tracking PWA with voice input and payroll export.
+- Employee time entry with voice notes (OpenAI Whisper)
+- Admin approval workflow (PIN: 7707)
+- Weekly and Monthly XLSX payroll exports
+- Cloud backup to Google Cloud Storage
+
+## PRODUCTION DEPLOYMENT
+- URL: https://labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com
+- Project: jcw-2-android-estimator
+- Region: us-central1
+- Runtime: nodejs22 on App Engine
+- Database: SQLite in /tmp/app.db (ephemeral, restored from Cloud Storage on startup)
+- Bucket: gs://jcw-labor-timekeeper
+
+## SECRETS (Google Secret Manager)
+- SMTP_USER: nathan@jcwelton.com
+- SMTP_PASS: (configured)
+- OPENAI_API_KEY: sk-proj-... (configured, version 4)
+
+## DEPLOY COMMANDS
+```powershell
+$gcloud = "C:\Users\nathan\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd"
+cd c:\Users\nathan\dev\repos\jcw_payroll\labor-timekeeper
+& $gcloud app deploy --quiet
+
+# Seed after deploy:
+$baseUrl = "https://labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com"
+Invoke-RestMethod -Uri "$baseUrl/api/admin/seed" -Method POST
+```
+
+## CURRENT STATE / KNOWN ISSUES
+1. Load button in admin may not be working - needs testing
+2. Weekly export button needs testing
+3. Monthly report now includes dates per row (Date | Employee | Rate | Hours | Total)
+4. Select All checkbox added to approvals table
+5. Admin PIN gate working (7707)
+
+## RECENT CHANGES (not yet verified working)
+- lib/export/generateMonthly.js: Added date column to each row instead of aggregating
+- public/admin.html: Added Select All checkbox, total row in approvals table
+- lib/secrets.js: Loads secrets from Google Secret Manager
+- Voice recording: Safari/iOS compatibility (webm/mp4/aac/ogg fallbacks)
+
+## KEY FILES
+- server.js: Express API server, main entry point
+- public/app.html: Employee time entry UI
+- public/admin.html: Admin dashboard (PIN protected)
+- lib/export/generateMonthly.js: Monthly payroll XLSX (vertical format with dates)
+- lib/export/generateWeekly.js: Weekly per-employee XLSX
+- lib/storage.js: Cloud Storage backup/restore, reconciliation
+- lib/secrets.js: Google Secret Manager integration
+- app.yaml: App Engine config
+
+## API ENDPOINTS
+- POST /api/time-entries: Submit time entry
+- GET /api/approvals?week_start=YYYY-MM-DD: Get pending entries
+- POST /api/approve: Approve selected entries {ids: [...]}
+- GET /api/export/monthly?month=YYYY-MM: Download monthly XLSX
+- GET /api/admin/generate-week?week_start=YYYY-MM-DD: Generate weekly exports
+- GET /api/admin/generate-month?month=YYYY-MM: Generate monthly export
+- POST /api/admin/seed: Seed database from JSON files
+- POST /api/admin/reconcile: Archive and clear month data
+
+## DATA MODEL
+- employees (id, name, default_bill_rate)
+- customers (id, name, address)
+- rate_overrides (employee_id, customer_id, rate)
+- time_entries (employee_id, customer_id, work_date, hours, notes, status)
+- Status values: PENDING, APPROVED, REJECTED
+
+## TESTING
+- Playwright tests: npm test (18 tests)
+- Config: playwright.config.cjs
+- Tests file: tests/labor-timekeeper.spec.cjs
+
+## TODO / NEXT STEPS
+1. Test admin Load button locally
+2. Test Weekly and Monthly export buttons
+3. Verify date column appears in exported XLSX
+4. May need to fix admin.html JavaScript if buttons not working
+5. Run UAT tests after fixes
+
+## EMPLOYEE CATEGORIES
+- Hourly: Default employees (shown in main payroll section)
+- Admin: Chris J, Chris Z (shown in separate Office section, not per-customer)
+
+## NOTES
+- /tmp is ephemeral on App Engine - database auto-restores from Cloud Storage
+- Backup runs every 5 minutes in production
+- Use reconciliation feature to archive months before clearing

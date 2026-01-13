@@ -1,11 +1,10 @@
 [
-  {"name":"Chris Jacobi","pin":"1111","role":"admin"},
-  {"name":"Chris Zavesky","pin":"2222","role":"admin","aliases":["Chris Z","Chris Z."]},
-  {"name":"Boban Abbate","pin":"3333","role":"hourly"},
-  {"name":"Jason Green","pin":"4444","role":"hourly"},
-  {"name":"Thomas Brinson","pin":"5555","role":"hourly"},
-  {"name":"Phil Henderson","pin":"6666","role":"hourly"},
-  {"name":"Doug Kinsey","pin":"7777","role":"hourly"},
-  {"name":"Jafid Osorio","pin":"8888","role":"hourly"},
-  {"name":"Sean Matthew","pin":"9998","role":"hourly"}
+  {"name":"Chris Jacobi","role":"admin","default_bill_rate":100},
+  {"name":"Chris Zavesky","role":"admin","aliases":["Chris Z","Chris Z."],"default_bill_rate":100},
+  {"name":"Boban Abbate","role":"hourly","default_bill_rate":42.5},
+  {"name":"Jason Green","role":"hourly","default_bill_rate":35},
+  {"name":"Thomas Brinson","role":"hourly","default_bill_rate":35},
+  {"name":"Phil Henderson","role":"hourly","default_bill_rate":30},
+  {"name":"Doug Kinsey","role":"hourly","default_bill_rate":30},
+  {"name":"Sean Matthew","role":"hourly","default_bill_rate":20}
 ]
