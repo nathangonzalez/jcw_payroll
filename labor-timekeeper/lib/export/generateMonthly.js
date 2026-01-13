@@ -1,26 +1,59 @@
 /**
  * Monthly Payroll Breakdown XLSX Generator
- * Generates 1 consolidated workbook for the entire month
  * 
- * PRIVACY: Admin employees (Chris J, Chris Z) are shown as a single "Admin" column
- * to hide their individual internal costs. Hourly employees' costs are shown individually.
+ * Creates workbook with:
+ *   - One sheet per week ("Week of Jan 5", "Week of Jan 12", etc.)
+ *   - Final "Monthly Summary" sheet with totals
+ * 
+ * Each weekly sheet format:
+ *   Customer header row
+ *   Date | Employee | Rate | Hours | Total
+ *   Subtotal per customer
+ * 
+ * PRIVACY: Admin employees (Chris J, Chris Z) shown in separate section
  * 
  * Filename: Payroll_Breakdown_<YYYY-MM>.xlsx
- * Columns: Client | Hourly1 Hours/Rate/Amount | ... | Admin Hours/Amount | Row Total
  */
 
 import fs from "fs";
 import path from "path";
 import ExcelJS from "exceljs";
 import { getBillRate } from "../billing.js";
-import { getEmployeeCategory, calculatePayWithOT } from "../classification.js";
+import { getEmployeeCategory } from "../classification.js";
 
 /**
- * Generate monthly payroll breakdown XLSX
- * @param {Object} options
- * @param {Database} options.db - SQLite database instance
- * @param {string} options.month - Month in YYYY-MM format
- * @returns {Promise<{filepath: string, totals: Object}>}
+ * Get the Sunday that starts the week containing a given date
+ */
+function getWeekSunday(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  const day = date.getDay(); // 0 = Sunday
+  date.setDate(date.getDate() - day);
+  return formatYmd(date);
+}
+
+/**
+ * Format date as YYYY-MM-DD
+ */
+function formatYmd(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * Format date for sheet name like "Week of Jan 5"
+ */
+function formatWeekName(sundayStr) {
+  const [y, m, d] = sundayStr.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `Week of ${months[date.getMonth()]} ${date.getDate()}`;
+}
+
+/**
+ * Generate monthly payroll breakdown XLSX with weekly sheets
  */
 export async function generateMonthlyExport({ db, month }) {
   // Calculate date range for the month
@@ -29,8 +62,9 @@ export async function generateMonthlyExport({ db, month }) {
   const nextMonth = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, "0")}-01`;
 
   // Create output directory
-  const outputDir = path.resolve(`./exports/${month}`);
-  ensureDir(outputDir);
+  const baseDir = process.env.NODE_ENV === 'production' ? '/tmp/exports' : './exports';
+  const outputDir = path.resolve(`${baseDir}/${month}`);
+  if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
 
   // Query all approved entries for the month
   const entries = db.prepare(`
@@ -40,229 +74,302 @@ export async function generateMonthlyExport({ db, month }) {
     JOIN customers c ON c.id = te.customer_id
     WHERE te.work_date >= ? AND te.work_date < ?
       AND te.status = 'APPROVED'
-    ORDER BY c.name ASC, e.name ASC
+    ORDER BY te.work_date ASC, c.name ASC, e.name ASC
   `).all(monthStart, nextMonth);
 
-  // Get unique employees and split by category
-  const allEmployees = [...new Set(entries.map((r) => r.employee_name))].sort();
-  const employeeIds = new Map(entries.map((r) => [r.employee_name, r.emp_id]));
-  
-  // Separate hourly vs admin employees (admin internal costs are private)
-  const hourlyEmployees = allEmployees.filter(name => getEmployeeCategory(name) === "hourly");
-  const adminEmployees = allEmployees.filter(name => getEmployeeCategory(name) === "admin");
-  const hasAdmins = adminEmployees.length > 0;
-
-  // Aggregate by customer + employee
-  const byCustomer = new Map();
+  // Group entries by week (Sunday start)
+  const byWeek = new Map();
   for (const row of entries) {
-    if (!byCustomer.has(row.cust_id)) {
-      byCustomer.set(row.cust_id, {
-        id: row.cust_id,
-        name: row.customer_name,
-        byEmployee: new Map(),
-      });
-    }
-    const cust = byCustomer.get(row.cust_id);
-    if (!cust.byEmployee.has(row.employee_name)) {
-      cust.byEmployee.set(row.employee_name, {
-        hours: 0,
-        empId: row.emp_id,
-      });
-    }
-    cust.byEmployee.get(row.employee_name).hours += Number(row.hours);
+    const weekSunday = getWeekSunday(row.work_date);
+    if (!byWeek.has(weekSunday)) byWeek.set(weekSunday, []);
+    byWeek.get(weekSunday).push(row);
   }
+  const sortedWeeks = [...byWeek.keys()].sort();
 
   // Create workbook
   const workbook = new ExcelJS.Workbook();
-  const ws = workbook.addWorksheet("Payroll Breakdown");
 
-  // Build header row:
-  // Client | Hourly1 Hours | Hourly1 Rate | Hourly1 Amount | ... | Admin Hours | Admin Amount | Row Total
-  const header = ["Client"];
-  for (const empName of hourlyEmployees) {
-    header.push(`${empName} Hours`, `${empName} Rate`, `${empName} Amount`);
-  }
-  // Admin as single column (no rate shown for privacy)
-  if (hasAdmins) {
-    header.push("Admin Hours", "Admin Amount");
-  }
-  header.push("Row Total");
-  ws.addRow(header);
-
-  // Style header
-  const headerRow = ws.getRow(1);
-  headerRow.font = { bold: true, color: { argb: "FFFFFFFF" } };
-  headerRow.fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FF4472C4" },
-  };
-
-  // Track totals
-  const hourlyTotals = new Map();
-  for (const empName of hourlyEmployees) {
-    hourlyTotals.set(empName, { hours: 0, amount: 0 });
-  }
-  let adminTotalHours = 0;
-  let adminTotalAmount = 0;
-  let grandTotal = 0;
-
-  // Data rows - one per customer
-  const sortedCustomers = [...byCustomer.values()].sort((a, b) =>
-    a.name.localeCompare(b.name)
-  );
-
-  for (const cust of sortedCustomers) {
-    const row = [cust.name];
-    let rowTotal = 0;
-
-    // Hourly employees - show individual detail
-    for (const empName of hourlyEmployees) {
-      const empData = cust.byEmployee.get(empName);
-      const empId = employeeIds.get(empName);
-      const hours = empData?.hours || 0;
-      const rate = empId ? getBillRate(db, empId, cust.id) : 0;
-      const amount = round2(hours * rate);
-
-      row.push(hours || "", rate || "", amount || "");
-      rowTotal += amount;
-
-      const empTotals = hourlyTotals.get(empName);
-      empTotals.hours += hours;
-      empTotals.amount += amount;
-    }
-
-    // Admin employees - combine into single column (no rates shown)
-    if (hasAdmins) {
-      let adminHours = 0;
-      let adminAmount = 0;
-      for (const adminName of adminEmployees) {
-        const empData = cust.byEmployee.get(adminName);
-        const empId = employeeIds.get(adminName);
-        const hours = empData?.hours || 0;
-        const rate = empId ? getBillRate(db, empId, cust.id) : 0;
-        adminHours += hours;
-        adminAmount += round2(hours * rate);
-      }
-      row.push(adminHours || "", round2(adminAmount) || "");
-      rowTotal += adminAmount;
-      adminTotalHours += adminHours;
-      adminTotalAmount += adminAmount;
-    }
-
-    row.push(round2(rowTotal));
-    grandTotal += rowTotal;
-    ws.addRow(row);
+  // Create a sheet for each week using the original weekly sheet logic
+  for (const weekSunday of sortedWeeks) {
+    const weekEntries = byWeek.get(weekSunday);
+    const sheetName = formatWeekName(weekSunday);
+    const ws = workbook.addWorksheet(sheetName);
+    setupWeeklyColumns(ws);
+    buildWeeklySheet(db, ws, weekEntries);
   }
 
-  // Add totals row
-  ws.addRow([]); // blank row
-  const totalsRow = ["TOTALS"];
-  for (const empName of hourlyEmployees) {
-    const empTotals = hourlyTotals.get(empName);
-    totalsRow.push(round2(empTotals.hours), "", round2(empTotals.amount));
-  }
-  if (hasAdmins) {
-    totalsRow.push(round2(adminTotalHours), round2(adminTotalAmount));
-  }
-  totalsRow.push(round2(grandTotal));
-  
-  const totalsRowRef = ws.addRow(totalsRow);
-  totalsRowRef.font = { bold: true };
-  totalsRowRef.fill = {
-    type: "pattern",
-    pattern: "solid",
-    fgColor: { argb: "FFFFE0B0" },
-  };
-
-  // Add summary section
-  ws.addRow([]);
-  ws.addRow(["SUMMARY BY CATEGORY"]);
-  ws.addRow(["Category", "Employees", "Total Hours", "Total Amount"]);
-  
-  // Hourly subtotal
-  let hourlySubtotalHours = 0;
-  let hourlySubtotalAmount = 0;
-  for (const [name, totals] of hourlyTotals) {
-    hourlySubtotalHours += totals.hours;
-    hourlySubtotalAmount += totals.amount;
-  }
-  ws.addRow(["Hourly", hourlyEmployees.length, round2(hourlySubtotalHours), round2(hourlySubtotalAmount)]);
-  
-  // Admin subtotal
-  if (hasAdmins) {
-    ws.addRow(["Admin", adminEmployees.length, round2(adminTotalHours), round2(adminTotalAmount)]);
-  }
-  
-  // Grand total
-  const grandRow = ws.addRow(["GRAND TOTAL", allEmployees.length, round2(hourlySubtotalHours + adminTotalHours), round2(grandTotal)]);
-  grandRow.font = { bold: true };
-
-  // Set column widths
-  ws.getColumn(1).width = 30; // Client column
-  for (let i = 2; i <= header.length; i++) {
-    ws.getColumn(i).width = 14;
-  }
-
-  // Format currency columns for hourly employees
-  for (let i = 0; i < hourlyEmployees.length; i++) {
-    const rateCol = 3 + i * 3; // Rate columns
-    const amountCol = 4 + i * 3; // Amount columns
-    ws.getColumn(rateCol).numFmt = '"$"#,##0.00';
-    ws.getColumn(amountCol).numFmt = '"$"#,##0.00';
-  }
-  
-  // Format Admin amount column
-  if (hasAdmins) {
-    const adminAmountCol = 2 + hourlyEmployees.length * 3 + 2; // Admin Amount column
-    ws.getColumn(adminAmountCol).numFmt = '"$"#,##0.00';
-  }
-  
-  // Row total column
-  ws.getColumn(header.length).numFmt = '"$"#,##0.00';
+  // Add the monthly summary as the last sheet (raw format, not pivoted)
+  const allEntries = entries;
+  const summarySheet = workbook.addWorksheet("Monthly Summary");
+  setupWeeklyColumns(summarySheet);
+  buildWeeklySheet(db, summarySheet, allEntries);
 
   // Save file
   const filename = `Payroll_Breakdown_${month}.xlsx`;
   const filepath = path.join(outputDir, filename);
   await workbook.xlsx.writeFile(filepath);
 
-  // Build totals summary
-  const totals = {
-    month,
-    customers: sortedCustomers.length,
-    employees: allEmployees.length,
-    hourlyEmployees: hourlyEmployees.length,
-    adminEmployees: adminEmployees.length,
-    hourlyTotal: round2(hourlySubtotalAmount),
-    adminTotal: round2(adminTotalAmount),
-    grandTotal: round2(grandTotal),
-  };
+  return { filepath, filename, outputDir };
+}
 
-  console.log(`[generateMonthly] Month ${month}: ${sortedCustomers.length} customers`);
-  console.log(`[generateMonthly] Hourly: ${hourlyEmployees.length} employees, $${totals.hourlyTotal}`);
-  console.log(`[generateMonthly] Admin: ${adminEmployees.length} employees, $${totals.adminTotal}`);
-  console.log(`[generateMonthly] Grand Total: $${totals.grandTotal}`);
+/**
+ * Set up column widths and formats for weekly sheet
+ */
+function setupWeeklyColumns(ws) {
+  // Hourly section: A=Date, B=Employee, C=Rate, D=Hours, E=Total
+  ws.getColumn(1).width = 12;
+  ws.getColumn(2).width = 25;
+  ws.getColumn(3).width = 12;
+  ws.getColumn(4).width = 10;
+  ws.getColumn(5).width = 14;
+  ws.getColumn(6).width = 3;  // Spacer
+  // Admin section: G=Date, H=Employee, I=Rate, J=Hours, K=Total
+  ws.getColumn(7).width = 12;
+  ws.getColumn(8).width = 20;
+  ws.getColumn(9).width = 12;
+  ws.getColumn(10).width = 10;
+  ws.getColumn(11).width = 14;
+  
+  // Number formats
+  ws.getColumn(3).numFmt = '"$"#,##0.00';
+  ws.getColumn(5).numFmt = '"$"#,##0.00';
+  ws.getColumn(9).numFmt = '"$"#,##0.00';
+  ws.getColumn(11).numFmt = '"$"#,##0.00';
+}
 
-  return { filepath, filename, totals, outputDir };
+/**
+ * Build a weekly sheet with entries grouped by customer
+ */
+function buildWeeklySheet(db, ws, entries) {
+  let hourlyTotal = 0;
+  let adminTotal = 0;
+  let currentRow = 0;
+  
+  // Separate hourly and admin entries
+  const hourlyEntries = entries.filter(e => e.category === "hourly");
+  const adminEntries = entries.filter(e => e.category === "admin");
+  
+  // Group hourly by customer
+  const hourlyByCustomer = new Map();
+  for (const entry of hourlyEntries) {
+    if (!hourlyByCustomer.has(entry.custId)) {
+      hourlyByCustomer.set(entry.custId, {
+        name: entry.custName,
+        entries: []
+      });
+    }
+    hourlyByCustomer.get(entry.custId).entries.push(entry);
+  }
+  
+  // Add header row: Customer grouping with Date | Employee | $/hr | Hr | Total
+  currentRow++;
+  const headerRow = ws.addRow(["Date", "Employee", "$/hr", "Hr", "Total"]);
+  headerRow.font = { bold: true };
+  headerRow.eachCell((cell, colNum) => {
+    if (colNum <= 5) {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9E1F2" } };
+    }
+  });
+  
+  // Add admin header (right side)
+  const adminHeaderRow = ws.getRow(1);
+  adminHeaderRow.getCell(7).value = "Date";
+  adminHeaderRow.getCell(7).font = { bold: true };
+  adminHeaderRow.getCell(8).value = "Admin";
+  adminHeaderRow.getCell(8).font = { bold: true };
+  adminHeaderRow.getCell(9).value = "$/hr";
+  adminHeaderRow.getCell(9).font = { bold: true };
+  adminHeaderRow.getCell(10).value = "Hr";
+  adminHeaderRow.getCell(10).font = { bold: true };
+  adminHeaderRow.getCell(11).value = "Total";
+  adminHeaderRow.getCell(11).font = { bold: true };
+  
+  // Sort customers alphabetically
+  const sortedCustomers = [...hourlyByCustomer.entries()].sort((a, b) => 
+    a[1].name.localeCompare(b[1].name)
+  );
+  
+  // Process hourly entries by customer
+  for (const [custId, custData] of sortedCustomers) {
+    // Customer header
+    currentRow++;
+    const custRow = ws.addRow([custData.name]);
+    custRow.font = { bold: true };
+    custRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2EFDA" } };
+    ws.mergeCells(currentRow, 1, currentRow, 5);
+    
+    const firstDataRow = currentRow + 1;
+    let customerTotal = 0;
+    
+    // Sort entries by date then employee
+    custData.entries.sort((a, b) => {
+      const dateCmp = a.date.localeCompare(b.date);
+      return dateCmp !== 0 ? dateCmp : a.empName.localeCompare(b.empName);
+    });
+    
+    // Add entry rows
+    for (const entry of custData.entries) {
+      const rate = getBillRate(db, entry.empId, custId);
+      const amount = round2(entry.hours * rate);
+      
+      currentRow++;
+      ws.addRow([entry.date, entry.empName, rate, entry.hours, { formula: `C${currentRow}*D${currentRow}` }]);
+      
+      customerTotal += amount;
+      hourlyTotal += amount;
+    }
+    
+    // Customer subtotal
+    const lastDataRow = currentRow;
+    currentRow++;
+    const subtotalRow = ws.addRow(["", "", "", "", { formula: `SUM(E${firstDataRow}:E${lastDataRow})` }]);
+    subtotalRow.font = { bold: true };
+    subtotalRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFFF2CC" } };
+    
+    // Blank row
+    currentRow++;
+    ws.addRow([]);
+  }
+  
+  // Add hourly subtotal
+  currentRow++;
+  const hourlySubtotalRow = ws.addRow(["Subtotal (Hourly)", "", "", "", round2(hourlyTotal)]);
+  hourlySubtotalRow.font = { bold: true };
+  hourlySubtotalRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9E1F2" } };
+  
+  // Process admin entries (right side)
+  if (adminEntries.length > 0) {
+    // Group admin by customer
+    const adminByCustomer = new Map();
+    for (const entry of adminEntries) {
+      if (!adminByCustomer.has(entry.custId)) {
+        adminByCustomer.set(entry.custId, {
+          name: entry.custName,
+          entries: []
+        });
+      }
+      adminByCustomer.get(entry.custId).entries.push(entry);
+    }
+    
+    let adminRow = 2;
+    const sortedAdminCustomers = [...adminByCustomer.entries()].sort((a, b) =>
+      a[1].name.localeCompare(b[1].name)
+    );
+    
+    for (const [custId, custData] of sortedAdminCustomers) {
+      // Customer header
+      const custRow = ws.getRow(adminRow);
+      custRow.getCell(7).value = custData.name;
+      custRow.getCell(7).font = { bold: true };
+      custRow.getCell(7).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2EFDA" } };
+      ws.mergeCells(adminRow, 7, adminRow, 11);
+      adminRow++;
+      
+      // Sort entries
+      custData.entries.sort((a, b) => {
+        const dateCmp = a.date.localeCompare(b.date);
+        return dateCmp !== 0 ? dateCmp : a.empName.localeCompare(b.empName);
+      });
+      
+      // Add entries
+      for (const entry of custData.entries) {
+        const rate = getBillRate(db, entry.empId, custId);
+        const amount = round2(entry.hours * rate);
+        
+        const row = ws.getRow(adminRow);
+        row.getCell(7).value = entry.date;
+        row.getCell(8).value = entry.empName;
+        row.getCell(9).value = rate;
+        row.getCell(10).value = entry.hours;
+        row.getCell(11).value = { formula: `I${adminRow}*J${adminRow}` };
+        
+        adminTotal += amount;
+        adminRow++;
+      }
+      adminRow++; // Blank between customers
+    }
+    
+    // Admin subtotal
+    adminRow++;
+    const adminSubtotalRow = ws.getRow(adminRow);
+    adminSubtotalRow.getCell(7).value = "Subtotal (Office)";
+    adminSubtotalRow.getCell(7).font = { bold: true };
+    adminSubtotalRow.getCell(11).value = round2(adminTotal);
+    adminSubtotalRow.getCell(11).font = { bold: true };
+    adminSubtotalRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFCE4D6" } };
+  }
+  
+  // Add office subtotal row
+  currentRow++;
+  const officeRow = ws.addRow(["Office (Admin)", "", "", "", round2(adminTotal)]);
+  officeRow.font = { bold: true };
+  officeRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFCE4D6" } };
+  
+  // Grand total for week
+  currentRow++;
+  const weekTotal = round2(hourlyTotal + adminTotal);
+  const totalRow = ws.addRow(["WEEK TOTAL", "", "", "", weekTotal]);
+  const weekTotalRow = ws.rowCount; // Track this row number for summary formulas
+  totalRow.font = { bold: true, size: 12 };
+  totalRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+  totalRow.getCell(1).font = { bold: true, size: 12, color: { argb: "FFFFFFFF" } };
+  totalRow.getCell(5).font = { bold: true, size: 12, color: { argb: "FFFFFFFF" } };
+  
+  return { hourlyTotal: round2(hourlyTotal), adminTotal: round2(adminTotal), weekTotal, weekTotalRow };
+}
+
+/**
+ * Build the monthly summary sheet with formulas referencing weekly sheets
+ * @param {Object} ws - ExcelJS worksheet
+ * @param {Array} weeklyTotals - Array of {sheetName, hourlyTotalRow, adminTotalRow, weekTotalRow}
+ * @param {string} month - Month string YYYY-MM
+ */
+function buildSummarySheet(ws, weeklyTotals, month) {
+  // Set up same columns as weekly sheets for consistency
+  ws.getColumn(1).width = 12;
+  ws.getColumn(2).width = 25;
+  ws.getColumn(3).width = 12;
+  ws.getColumn(4).width = 10;
+  ws.getColumn(5).width = 14;
+  
+  ws.getColumn(3).numFmt = '"$"#,##0.00';
+  ws.getColumn(5).numFmt = '"$"#,##0.00';
+  
+  // Title
+  const titleRow = ws.addRow([`Monthly Summary - ${month}`]);
+  titleRow.font = { bold: true, size: 14 };
+  ws.mergeCells(1, 1, 1, 5);
+  
+  ws.addRow([]);
+  
+  // Header matching weekly sheets
+  const headerRow = ws.addRow(["Week", "", "", "", "Total"]);
+  headerRow.font = { bold: true };
+  headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9E1F2" } };
+  
+  // Weekly rows with formulas pointing to each week sheet's total
+  const weekRowStart = 4;
+  for (let i = 0; i < weeklyTotals.length; i++) {
+    const week = weeklyTotals[i];
+    // Reference the WEEK TOTAL cell from each weekly sheet
+    const formula = `'${week.sheetName}'!E${week.weekTotalRow}`;
+    const row = ws.addRow([week.sheetName, "", "", "", { formula }]);
+    row.getCell(5).numFmt = '"$"#,##0.00';
+  }
+  
+  ws.addRow([]);
+  
+  // Monthly grand total - SUM of all weekly totals
+  const weekRowEnd = weekRowStart + weeklyTotals.length - 1;
+  const totalRow = ws.addRow(["MONTHLY TOTAL", "", "", "", { formula: `SUM(E${weekRowStart}:E${weekRowEnd})` }]);
+  totalRow.font = { bold: true, size: 12 };
+  totalRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
+  totalRow.getCell(1).font = { bold: true, size: 12, color: { argb: "FFFFFFFF" } };
+  totalRow.getCell(5).font = { bold: true, size: 12, color: { argb: "FFFFFFFF" } };
+  totalRow.getCell(5).numFmt = '"$"#,##0.00';
 }
 
 // Helper functions
-function getWeekStart(ymd) {
-  const [y, m, d] = ymd.split("-").map(Number);
-  const date = new Date(y, m - 1, d);
-  const day = date.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  date.setDate(date.getDate() + diff);
-  return formatYmd(date);
-}
-
-function formatYmd(date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-}
-
 function ensureDir(dir) {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
