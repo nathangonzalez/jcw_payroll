@@ -9,6 +9,7 @@ a{ color:var(--accent); text-decoration:none; }
 h1,h2{ margin:0 0 10px 0; }
 .muted{ color:var(--muted); }
 input,select,button,textarea{ width:100%; padding:10px 12px; border-radius:12px; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.06); color:var(--text); }
+select option{ background:#1a2744; color:var(--text); }
 button{ cursor:pointer; background:rgba(110,168,254,.18); border-color:rgba(110,168,254,.35); }
 button:hover{ background:rgba(110,168,254,.28); }
 button.primary{ background:rgba(110,168,254,.35); }

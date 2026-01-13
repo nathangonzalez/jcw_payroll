@@ -9,14 +9,8 @@
 <body>
   <div class="container">
     <div class="row" style="align-items:center; justify-content:space-between;">
-      <div>
-        <h1>Admin</h1>
-        <div class="muted small" id="who"></div>
-      </div>
-      <div style="display:flex; gap:8px;">
-        <a href="/app" class="badge">Employee view</a>
-        <a href="/" class="badge">Login</a>
-      </div>
+      <h1>Admin</h1>
+      <a href="/app" class="badge">Employee view</a>
     </div>
 
     <div class="card" style="margin-top:12px;">
@@ -38,6 +32,43 @@
         <div class="col"><button id="approveBtn" class="primary">Approve Selected</button></div>
         <div class="col"><button id="exportMonthBtn">Export Monthly Summary</button></div>
       </div>
+
+      <hr/>
+
+      <h2>📊 Payroll XLSX Pipeline</h2>
+      <div class="row">
+        <div class="col">
+          <label class="small muted">Week Start</label>
+          <input id="pipelineWeek" placeholder="YYYY-MM-DD" />
+        </div>
+        <div class="col">
+          <label class="small muted">Month</label>
+          <input id="pipelineMonth" placeholder="YYYY-MM" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px; gap:8px;">
+        <button id="genWeekBtn" class="primary">Generate Weekly (per Employee)</button>
+        <button id="genMonthBtn" class="primary">Generate Monthly Breakdown</button>
+        <button id="genBothBtn" style="background:#2ecc71;">Generate Both</button>
+      </div>
+      <div id="pipelineResult" style="margin-top:12px; padding:10px; background:#f8f9fa; border-radius:4px; display:none;">
+        <pre id="pipelineOutput" style="margin:0; white-space:pre-wrap; font-size:12px;"></pre>
+      </div>
+
+      <hr/>
+
+      <h2>🗑️ Close Month (Retention Policy)</h2>
+      <div class="row">
+        <div class="col">
+          <label class="small muted">Month to Close</label>
+          <input id="closeMonth" placeholder="YYYY-MM" />
+        </div>
+        <div class="col">
+          <label class="small muted">&nbsp;</label>
+          <button id="closeMonthBtn" style="background:#e74c3c; color:white;">Close & Delete Entries</button>
+        </div>
+      </div>
+      <p class="muted small">⚠️ This permanently deletes all time entries for the specified month.</p>
 
       <hr/>
 
@@ -69,7 +100,6 @@ function el(id){ return document.getElementById(id); }
 
 async function api(url, opts){
   const r = await fetch(url, opts);
-  if (r.status===401) { location.href='/'; return; }
   const j = await r.json().catch(()=>null);
   if (!r.ok) throw new Error((j && j.error) || 'Request failed');
   return j;
@@ -78,9 +108,6 @@ async function api(url, opts){
 let submittedCache=[];
 
 async function init(){
-  const me = await api('/api/me');
-  if (!me.is_admin) { alert('Admin only'); location.href='/app'; return; }
-  el('who').textContent = `Logged in as ${me.name} (admin)`;
 
   const customers = await api('/api/customers');
   el('customer').innerHTML = customers.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
@@ -90,12 +117,132 @@ async function init(){
   el('exportMonthBtn').onclick = exportMonth;
   el('exportInvoiceBtn').onclick = exportInvoice;
 
+  // Pipeline buttons
+  el('genWeekBtn').onclick = generateWeekly;
+  el('genMonthBtn').onclick = generateMonthlyBreakdown;
+  el('genBothBtn').onclick = generateBoth;
+  el('closeMonthBtn').onclick = closeMonth;
+
+  // Set default values for pipeline inputs
+  const now = new Date();
+  const ym = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  el('pipelineMonth').value = ym;
+  el('closeMonth').value = ym;
+
   // default week start: ask server by loading approvals once without week
   const data = await api('/api/approvals');
   el('weekStart').value = data.week_start;
+  el('pipelineWeek').value = data.week_start;
   submittedCache = data.submitted;
   renderSubmitted(data.submitted);
 }
+
+// Pipeline functions
+async function generateWeekly() {
+  const week_start = el('pipelineWeek').value.trim();
+  if (!week_start) { alert('Enter week start date'); return; }
+  try {
+    showPipelineResult('Generating weekly exports...');
+    const result = await api(`/api/admin/generate-week?week_start=${encodeURIComponent(week_start)}`);
+    const output = [
+      `✅ Weekly Export Complete`,
+      `Week: ${result.weekStart}`,
+      `Output: ${result.outputDir}`,
+      ``,
+      `Files Generated (${result.files.length}):`,
+      ...result.files.map(f => `  • ${f.filename}: ${f.hours}hrs ($${f.amount}) [${f.category}]`),
+      ``,
+      `Totals:`,
+      `  Hours: ${result.totals.totalHours} (${result.totals.totalRegular} reg + ${result.totals.totalOT} OT)`,
+      `  Amount: $${result.totals.totalAmount}`,
+    ].join('\n');
+    showPipelineResult(output);
+  } catch (err) {
+    showPipelineResult(`❌ Error: ${err.message}`);
+  }
+}
+
+async function generateMonthlyBreakdown() {
+  const month = el('pipelineMonth').value.trim();
+  if (!month) { alert('Enter month'); return; }
+  try {
+    showPipelineResult('Generating monthly breakdown...');
+    const result = await api(`/api/admin/generate-month?month=${encodeURIComponent(month)}`);
+    const output = [
+      `✅ Monthly Export Complete`,
+      `Month: ${result.month}`,
+      `File: ${result.filename}`,
+      ``,
+      `Summary:`,
+      `  Customers: ${result.totals.customers}`,
+      `  Employees: ${result.totals.employees}`,
+      `  Grand Total: $${result.totals.grandTotal}`,
+    ].join('\n');
+    showPipelineResult(output);
+  } catch (err) {
+    showPipelineResult(`❌ Error: ${err.message}`);
+  }
+}
+
+async function generateBoth() {
+  try {
+    showPipelineResult('Generating both weekly and monthly exports...');
+    
+    const week_start = el('pipelineWeek').value.trim();
+    const month = el('pipelineMonth').value.trim();
+    
+    const weekResult = week_start ? await api(`/api/admin/generate-week?week_start=${encodeURIComponent(week_start)}`) : null;
+    const monthResult = month ? await api(`/api/admin/generate-month?month=${encodeURIComponent(month)}`) : null;
+    
+    let output = '✅ Export Complete\n\n';
+    
+    if (weekResult) {
+      output += `WEEKLY (${weekResult.weekStart}):\n`;
+      output += `  Files: ${weekResult.files.length}\n`;
+      output += `  Hours: ${weekResult.totals.totalHours}\n`;
+      output += `  Amount: $${weekResult.totals.totalAmount}\n\n`;
+    }
+    
+    if (monthResult) {
+      output += `MONTHLY (${monthResult.month}):\n`;
+      output += `  File: ${monthResult.filename}\n`;
+      output += `  Grand Total: $${monthResult.totals.grandTotal}\n`;
+    }
+    
+    showPipelineResult(output);
+  } catch (err) {
+    showPipelineResult(`❌ Error: ${err.message}`);
+  }
+}
+
+async function closeMonth() {
+  const month = el('closeMonth').value.trim();
+  if (!month) { alert('Enter month to close'); return; }
+  
+  const confirmed = confirm(`⚠️ WARNING: This will permanently delete ALL time entries for ${month}.\n\nAre you sure?`);
+  if (!confirmed) return;
+  
+  const doubleConfirm = confirm(`FINAL CONFIRMATION: Delete all entries for ${month}?`);
+  if (!doubleConfirm) return;
+  
+  try {
+    showPipelineResult('Closing month...');
+    const result = await api('/api/admin/close-month', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ month, confirm: true })
+    });
+    showPipelineResult(`✅ ${result.message}`);
+  } catch (err) {
+    showPipelineResult(`❌ Error: ${err.message}`);
+  }
+}
+
+function showPipelineResult(text) {
+  el('pipelineResult').style.display = 'block';
+  el('pipelineOutput').textContent = text;
+}
+
 async function loadSubmitted(){
   const week_start = el('weekStart').value.trim();
   const data = await api('/api/approvals?week_start=' + encodeURIComponent(week_start));

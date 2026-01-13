@@ -35,8 +35,24 @@ CREATE TABLE IF NOT EXISTS employees (
 CREATE TABLE IF NOT EXISTS customers (
   id TEXT PRIMARY KEY,
   name TEXT UNIQUE NOT NULL,
+  address TEXT DEFAULT '',
   created_at TEXT NOT NULL
 );
+  `);
+
+  // Backward compatible migration: add address column if it doesn't exist
+  try {
+    const cols = db.prepare("PRAGMA table_info(customers)").all();
+    const hasAddress = cols.some(c => c.name === 'address');
+    if (!hasAddress) {
+      db.exec("ALTER TABLE customers ADD COLUMN address TEXT DEFAULT ''");
+      console.log('[migrate] Added address column to customers table');
+    }
+  } catch (e) {
+    // Column might already exist, ignore
+  }
+
+  db.exec(`
 
 CREATE TABLE IF NOT EXISTS rate_overrides (
   id TEXT PRIMARY KEY,

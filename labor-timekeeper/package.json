@@ -1,13 +1,17 @@
 {
   "name": "labor-timekeeper",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "node --watch server.js",
     "start": "node server.js",
     "seed": "node scripts/seed.js",
-    "export:monthly": "node scripts/export_monthly.js"
+    "simulate": "node scripts/simulate.js",
+    "export:monthly": "node scripts/export_monthly.js",
+    "test": "npx playwright test",
+    "test:ui": "npx playwright test --ui",
+    "test:headed": "npx playwright test --headed"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -25,5 +29,8 @@
     "nanoid": "^5.0.7",
     "openai": "^4.56.0",
     "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.57.0"
   }
 }

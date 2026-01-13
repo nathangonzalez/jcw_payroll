@@ -17,10 +17,25 @@ const overrides = readJson("./seed/rate_overrides.json");
 const now = new Date().toISOString();
 
 db.transaction(() => {
-  // Customers
-  const insertCustomer = db.prepare("INSERT OR IGNORE INTO customers (id, name, created_at) VALUES (?, ?, ?)");
-  for (const name of customers) {
-    insertCustomer.run(id("cust_"), name, now);
+  // Customers - now with address support
+  // Insert new customer or update address if blank
+  const findCustomer = db.prepare("SELECT id, address FROM customers WHERE LOWER(name) = LOWER(?)");
+  const insertCustomer = db.prepare("INSERT INTO customers (id, name, address, created_at) VALUES (?, ?, ?, ?)");
+  const updateAddress = db.prepare("UPDATE customers SET address = ? WHERE id = ?");
+  
+  for (const c of customers) {
+    const name = typeof c === 'string' ? c : c.name;
+    const address = typeof c === 'string' ? '' : (c.address || '');
+    
+    const existing = findCustomer.get(name);
+    if (existing) {
+      // Update address if existing is blank and new has address
+      if ((!existing.address || existing.address === '') && address) {
+        updateAddress.run(address, existing.id);
+      }
+    } else {
+      insertCustomer.run(id("cust_"), name, address, now);
+    }
   }
 
   // Employees
@@ -31,13 +46,15 @@ db.transaction(() => {
   `);
 
   for (const e of employees) {
+    // Support both old format (is_admin) and new format (role: "admin" | "hourly")
+    const isAdmin = e.is_admin ? 1 : (e.role === 'admin' ? 1 : 0);
     insertEmployee.run(
       id("emp_"),
       e.name,
       hashPin(e.pin || "0000"),
       Number(e.default_bill_rate || 0),
       Number(e.default_pay_rate || 0),
-      e.is_admin ? 1 : 0,
+      isAdmin,
       JSON.stringify(e.aliases || []),
       now
     );
