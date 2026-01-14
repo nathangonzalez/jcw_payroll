@@ -51,7 +51,6 @@
       </div>
       <div class="row" style="margin-top:12px;">
         <div class="col"><button class="primary" id="saveBtn">Save / Update</button></div>
-        <div class="col"><button id="submitBtn">Submit Week</button></div>
       </div>
 
       <hr/>
@@ -196,7 +195,6 @@ async function init(){
   }
 
   el('saveBtn').onclick = saveEntry;
-  el('submitBtn').onclick = submitWeek;
 
   restoreDraft();
 

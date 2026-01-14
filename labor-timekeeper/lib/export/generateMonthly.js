@@ -79,9 +79,11 @@ export async function generateMonthlyExport({ db, month }) {
 
   // Normalize DB rows to the shape expected by sheet builders and group by week (Sunday start)
   const byWeek = new Map();
+  // Also build a monthly aggregation by customer -> employee
+  const monthlyAgg = new Map();
+
   for (const r of entries) {
     const row = {
-      // normalized fields expected by buildWeeklySheet
       date: r.work_date,
       empName: r.employee_name,
       empId: r.emp_id,
@@ -89,14 +91,21 @@ export async function generateMonthlyExport({ db, month }) {
       custId: r.cust_id,
       hours: Number(r.hours),
       notes: r.notes || '',
-      // assign category using classification helper
       category: getEmployeeCategory(r.employee_name)
     };
 
     const weekSunday = getWeekSunday(row.date);
     if (!byWeek.has(weekSunday)) byWeek.set(weekSunday, []);
     byWeek.get(weekSunday).push(row);
+
+    // monthly aggregation: customer -> employee -> { hours, amount }
+    if (!monthlyAgg.has(row.custId)) monthlyAgg.set(row.custId, { name: row.custName, employees: new Map() });
+    const custBucket = monthlyAgg.get(row.custId);
+    if (!custBucket.employees.has(row.empId)) custBucket.employees.set(row.empId, { name: row.empName, hours: 0 });
+    const empBucket = custBucket.employees.get(row.empId);
+    empBucket.hours += row.hours;
   }
+
   const sortedWeeks = [...byWeek.keys()].sort();
 
   // Create workbook
@@ -124,7 +133,7 @@ export async function generateMonthlyExport({ db, month }) {
 
   // Add the monthly summary as the last sheet with formulas referencing weekly sheets
   const summarySheet = workbook.addWorksheet("Monthly Summary");
-  buildSummarySheet(summarySheet, weeklyTotals, month);
+  buildSummarySheet(summarySheet, weeklyTotals, monthlyAgg, db, month);
 
   // Save file
   const filename = `Payroll_Breakdown_${month}.xlsx`;
@@ -358,7 +367,7 @@ function buildWeeklySheet(db, ws, entries) {
  * @param {Array} weeklyTotals - Array of {sheetName, hourlyTotalRow, adminTotalRow, weekTotalRow}
  * @param {string} month - Month string YYYY-MM
  */
-function buildSummarySheet(ws, weeklyTotals, month) {
+function buildSummarySheet(ws, weeklyTotals, monthlyAgg, db, month) {
   // Set up same columns as weekly sheets for consistency
   ws.getColumn(1).width = 12;
   ws.getColumn(2).width = 25;
@@ -376,26 +385,41 @@ function buildSummarySheet(ws, weeklyTotals, month) {
   
   ws.addRow([]);
   
-  // Header matching weekly sheets
-  const headerRow = ws.addRow(["Week", "", "", "", "Total"]);
+  // Build a monthly summary that mirrors weekly sheets but aggregated by customer and employee
+  // Header row
+  const headerRow = ws.addRow(["Customer", "Employee", "$/hr", "Hr", "Total"]);
   headerRow.font = { bold: true };
   headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9E1F2" } };
-  
-  // Weekly rows with formulas pointing to each week sheet's total
-  const weekRowStart = 4;
-  for (let i = 0; i < weeklyTotals.length; i++) {
-    const week = weeklyTotals[i];
-    // Reference the WEEK TOTAL cell from each weekly sheet
-    const formula = `'${week.sheetName}'!E${week.weekTotalRow}`;
-    const row = ws.addRow([week.sheetName, "", "", "", { formula }]);
-    row.getCell(5).numFmt = '"$"#,##0.00';
+
+  // Iterate customers in alphabetical order
+  const customers = [...monthlyAgg.entries()].map(([custId, data]) => ({ custId, name: data.name, employees: data.employees }));
+  customers.sort((a,b) => a.name.localeCompare(b.name));
+
+  let totalMonthly = 0;
+  for (const cust of customers) {
+    // Customer header
+    const custRow = ws.addRow([cust.name]);
+    custRow.font = { bold: true };
+    custRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2EFDA" } };
+    ws.mergeCells(ws.lastRow.number, 1, ws.lastRow.number, 5);
+
+    // Employees under customer
+    const emps = [...cust.employees.entries()].map(([empId, e]) => ({ empId, name: e.name, hours: e.hours }));
+    emps.sort((a,b) => a.name.localeCompare(b.name));
+
+    for (const e of emps) {
+      const rate = getBillRate(db, e.empId, cust.custId);
+      const amount = round2(e.hours * rate);
+      totalMonthly += amount;
+      ws.addRow(["", e.name, rate, round2(e.hours), amount]);
+    }
+
+    // Blank row between customers
+    ws.addRow([]);
   }
-  
-  ws.addRow([]);
-  
-  // Monthly grand total - SUM of all weekly totals
-  const weekRowEnd = weekRowStart + weeklyTotals.length - 1;
-  const totalRow = ws.addRow(["MONTHLY TOTAL", "", "", "", { formula: `SUM(E${weekRowStart}:E${weekRowEnd})` }]);
+
+  // Monthly total row
+  const totalRow = ws.addRow(["MONTHLY TOTAL", "", "", "", totalMonthly]);
   totalRow.font = { bold: true, size: 12 };
   totalRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
   totalRow.getCell(1).font = { bold: true, size: 12, color: { argb: "FFFFFFFF" } };
