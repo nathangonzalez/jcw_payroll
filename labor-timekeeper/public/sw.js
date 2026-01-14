@@ -1,5 +1,6 @@
 // Service Worker for Labor Timekeeper PWA
-const CACHE_NAME = 'timekeeper-v2';
+// Bump this value when static assets change to force clients to refresh cache
+const CACHE_NAME = 'timekeeper-v3';
 const OFFLINE_URL = '/offline.html';
 
 // Files to cache for offline use
