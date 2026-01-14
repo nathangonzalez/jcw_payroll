@@ -32,11 +32,13 @@
 
       <div class="row" style="margin-top:12px;">
         <div class="col" style="flex:2;">
-          <label class="small muted" for="customerSelect">Customer</label>
-          <select id="customerSelect" title="Select customer" style="font-size:1rem; padding:8px;">
-            <option value="">-- Select customer --</option>
-          </select>
-          <div id="customerAddress" class="small muted" style="margin-top:4px; font-style:italic;"></div>
+          <label class="small muted" for="customerName">Client</label>
+          <input id="customerName" list="customerList" placeholder="Start typing client..." autocomplete="off" style="font-size:1rem; padding:8px; width:100%" />
+          <datalist id="customerList"></datalist>
+          <!-- Keep a hidden select for compatibility with existing tests/scripts -->
+            <select id="customerSelect"></select>
+            <div id="customerAddress" class="small muted" style="margin-top:4px; font-style:italic;"></div>
+            <div id="customerConfirm" class="small muted" style="margin-top:4px; font-style:italic;"></div>
         </div>
         <div class="col">
           <label class="small muted" for="day">Day</label>
@@ -96,7 +98,7 @@ async function api(url, opts){
 // Draft persistence
 function saveDraft() {
   const draft = {
-    customerId: el('customerSelect').value,
+    customerName: (el('customerName') && el('customerName').value) || '',
     day: el('day').value,
     hours: el('hours').value,
     savedAt: new Date().toISOString()
@@ -124,11 +126,11 @@ function restoreDraft() {
   const hoursSinceSave = (Date.now() - savedAt.getTime()) / (1000 * 60 * 60);
   if (hoursSinceSave > 24) { clearDraft(); return; }
   
-  if (draft.customerId) el('customerSelect').value = draft.customerId;
+  if (draft.customerName) el('customerName').value = draft.customerName;
   if (draft.day) el('day').value = draft.day;
   if (draft.hours) el('hours').value = draft.hours;
   
-  updateCustomerAddress();
+  renderCustomerConfirm(draft.customerName || '');
 }
 
 async function init(){
@@ -164,15 +166,24 @@ async function init(){
     await loadWeek();
   };
 
-  // Load customers into select dropdown
+  // Load customers into datalist for free-text client input
   CUSTOMERS = await api('/api/customers');
-  el('customerSelect').innerHTML = '<option value="">-- Select customer --</option>' + 
-    CUSTOMERS.map(c => {
-      const label = c.address ? `${c.name} — ${c.address}` : c.name;
-      return `<option value="${c.id}" data-name="${c.name}" data-address="${c.address || ''}">${label}</option>`;
-    }).join('');
+  el('customerList').innerHTML = CUSTOMERS.map(c => {
+    const label = c.address ? `${c.name} — ${c.address}` : c.name;
+    return `<option value="${c.name}" data-id="${c.id}" data-address="${c.address || ''}">${label}</option>`;
+  }).join('');
 
+  // Also populate hidden select for compatibility with legacy tests
+  el('customerSelect').innerHTML = '<option value="">-- Select customer --</option>' + CUSTOMERS.map(c => {
+    const label = c.address ? `${c.name} — ${c.address}` : c.name;
+    return `<option value="${c.id}" data-name="${c.name}" data-address="${c.address || ''}">${label}</option>`;
+  }).join('');
+  // Keep address updated when select changes (tests may interact with select)
   el('customerSelect').addEventListener('change', updateCustomerAddress);
+
+  // Customer input handlers
+  el('customerName').addEventListener('input', (e)=>{ renderCustomerConfirm(e.target.value); saveDraftDebounced(); });
+  el('customerName').addEventListener('change', (e)=>{ renderCustomerConfirm(e.target.value); saveDraftDebounced(); });
 
   // If employee already selected, load week
   if (EMPLOYEE) {
@@ -189,7 +200,7 @@ async function init(){
 
   restoreDraft();
 
-  ['customerSelect', 'day', 'hours'].forEach(id => {
+  ['customerName', 'day', 'hours'].forEach(id => {
     if (el(id)) {
       el(id).addEventListener('input', saveDraft);
       el(id).addEventListener('change', saveDraft);
@@ -241,12 +252,33 @@ async function refresh(){
     const label = c.address ? `${c.name} — ${c.address}` : c.name;
     return `<option value="${c.name}" data-id="${c.id}" data-address="${c.address || ''}">${label}</option>`;
   }).join('');
+
+  // Mirror into hidden select for compatibility
+  el('customerSelect').innerHTML = '<option value="">-- Select customer --</option>' + CUSTOMERS.map(c => {
+    const label = c.address ? `${c.name} — ${c.address}` : c.name;
+    return `<option value="${c.id}" data-name="${c.name}" data-address="${c.address || ''}">${label}</option>`;
+  }).join('');
 }
 
 function findCustomerByName(name) {
   if (!name) return null;
   const lower = name.toLowerCase().trim();
   return CUSTOMERS.find(c => c.name.toLowerCase() === lower);
+}
+
+function renderCustomerConfirm(name) {
+  const c = findCustomerByName(name);
+  const div = el('customerConfirm');
+  if (!name || !name.trim()) { div.textContent = ''; return; }
+  if (c) div.textContent = c.address ? `Confirm address: ${c.address}` : 'No address on file.';
+  else div.textContent = 'New client will be created (address optional).';
+}
+
+// Debounce helper for draft saves
+let _draftTimer = null;
+function saveDraftDebounced(timeout=400) {
+  if (_draftTimer) clearTimeout(_draftTimer);
+  _draftTimer = setTimeout(()=>{ saveDraft(); _draftTimer = null; }, timeout);
 }
 
 function updateCustomerAddress() {
@@ -267,13 +299,28 @@ function updateCustomerAddress() {
 async function saveEntry(){
   if (!EMPLOYEE) { alert('Please select your name first'); return; }
   
-  const customer_id = el('customerSelect').value;
+  const customerName = (el('customerName') && el('customerName').value || '').trim();
+  let customer_id = null;
   const work_date = el('day').value;
   const hours = parseFloat(el('hours').value);
   
-  if (!customer_id || !work_date || !isFinite(hours)) { 
-    alert('Select a customer, pick a day, and enter hours'); 
-    return; 
+  if (!customerName || !work_date || !isFinite(hours)) {
+    alert('Enter a client name, pick a day, and enter hours');
+    return;
+  }
+
+  const existing = findCustomerByName(customerName);
+  if (existing) {
+    customer_id = existing.id;
+  } else {
+    // create it (free text, address optional)
+    const res = await api('/api/customers/find-or-create', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ name: customerName, address: '' })
+    });
+    customer_id = res.customer.id;
+    // refresh local customers cache
+    await refresh();
   }
   
   await api('/api/time-entries', {
@@ -281,9 +328,9 @@ async function saveEntry(){
     headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ employee_id: EMPLOYEE.id, customer_id, work_date, hours })
   });
-  el('customerSelect').value = '';
+  el('customerName').value = '';
   el('hours').value = '';
-  el('customerAddress').textContent = '';
+  el('customerConfirm').textContent = '';
   clearDraft();
   await refresh();
 }

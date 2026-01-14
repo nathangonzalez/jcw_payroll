@@ -50,14 +50,24 @@ export async function loadSecrets() {
   console.log('[secrets] Loading secrets from Secret Manager...');
   
   const secretNames = ['SMTP_USER', 'SMTP_PASS', 'OPENAI_API_KEY'];
-  
+  const loaded = [];
+  const missing = [];
+
   for (const name of secretNames) {
     if (!process.env[name]) {
       const value = await getSecret(name);
       if (value) {
         process.env[name] = value;
+        loaded.push(name);
         console.log(`[secrets] Loaded ${name}`);
+      } else {
+        missing.push(name);
       }
+    } else {
+      loaded.push(name);
     }
   }
+
+  if (loaded.length) console.log(`[secrets] Secrets loaded: ${loaded.join(', ')}`);
+  if (missing.length) console.warn(`[secrets] Missing secrets: ${missing.join(', ')}; related features may be disabled.`);
 }

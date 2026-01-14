@@ -8,6 +8,7 @@ import path from "path";
 import { openDb, id } from "./lib/db.js";
 import { weekStartYMD, weekDates, todayYMD } from "./lib/time.js";
 import { transcribeAudio, parseVoiceCommand } from "./lib/voice.js";
+import { getOpenAI } from "./lib/openai.js";
 import { buildMonthlyWorkbook } from "./lib/export_excel.js";
 import { generateWeeklyExports } from "./lib/export/generateWeekly.js";
 import { generateMonthlyExport } from "./lib/export/generateMonthly.js";
@@ -15,12 +16,16 @@ import { getHolidaysForYear, getHolidaysInRange } from "./lib/holidays.js";
 import { sendMonthlyReport } from "./lib/email.js";
 import { archiveAndClearPayroll, listArchives } from "./lib/storage.js";
 import { loadSecrets } from "./lib/secrets.js";
+import { migrate } from "./lib/migrate.js";
 
 // Load secrets from Google Secret Manager in production
 await loadSecrets();
 
 const app = express();
 const db = openDb();
+
+// Ensure DB schema is migrated (adds columns and seeds customers if empty)
+await migrate(db);
 
 app.use(helmet({ contentSecurityPolicy: false })); // allow inline scripts in MVP
 app.use(morgan("dev"));
@@ -158,6 +163,9 @@ app.post("/api/approve", (req, res) => {
 /** Voice: upload audio -> transcribe -> parse -> return proposed entries */
 app.post("/api/voice/command", upload.single("audio"), async (req, res) => {
   try {
+    const openai = getOpenAI();
+    if (!openai) return res.status(503).json({ error: "OpenAI API key not configured. Voice features are disabled." });
+
     if (!req.file) return res.status(400).json({ error: "audio file required" });
     const filePath = req.file.path;
     const originalName = req.file.originalname || "audio.webm";
@@ -595,8 +603,14 @@ app.post("/api/admin/reconcile", async (req, res) => {
     
     // Get preview of what will be archived
     const preview = db.prepare(`
-      SELECT COUNT(*) as count, SUM(hours) as totalHours, SUM(hours * bill_rate) as totalBilled
-      FROM time_entries WHERE work_date LIKE ?
+      SELECT
+        COUNT(*) as count,
+        SUM(te.hours) as totalHours,
+        SUM(te.hours * COALESCE(ro.bill_rate, e.default_bill_rate)) as totalBilled
+      FROM time_entries te
+      JOIN employees e ON e.id = te.employee_id
+      LEFT JOIN rate_overrides ro ON ro.employee_id = te.employee_id AND ro.customer_id = te.customer_id
+      WHERE te.work_date LIKE ?
     `).get(`${month}%`);
     
     if (!confirm) {

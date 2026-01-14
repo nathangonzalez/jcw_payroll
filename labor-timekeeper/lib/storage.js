@@ -35,6 +35,9 @@ export async function archiveAndClearPayroll(db, month) {
     FROM time_entries te
     JOIN employees e ON e.id = te.employee_id
     JOIN customers c ON c.id = te.customer_id
+    LEFT JOIN rate_overrides ro ON ro.employee_id = te.employee_id AND ro.customer_id = te.customer_id
+    -- expose per-entry bill_rate (override or employee default)
+    
     WHERE te.work_date LIKE ?
     ORDER BY te.work_date ASC
   `).all(`${month}%`);
@@ -46,7 +49,8 @@ export async function archiveAndClearPayroll(db, month) {
   let totalBilled = 0;
   for (const e of entries) {
     totalHours += e.hours || 0;
-    totalBilled += (e.hours || 0) * (e.bill_rate || 0);
+    const rate = (e.bill_rate != null) ? e.bill_rate : (e.default_bill_rate != null ? e.default_bill_rate : 0);
+    totalBilled += (e.hours || 0) * (rate || 0);
   }
   archiveData.summary = {
     entryCount: entries.length,
