@@ -60,6 +60,12 @@
       <div class="row" style="margin-top:12px; gap:8px;">
         <button id="genWeekBtn" class="primary">⬇️ Weekly Report (per Employee)</button>
         <button id="genMonthBtn" class="primary">⬇️ Monthly Breakdown</button>
+        <button id="simWeekBtn" class="primary">🧪 Simulate Week</button>
+      </div>
+      <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+        <label style="display:flex; gap:6px; align-items:center; font-size:13px;"><input type="checkbox" id="simReset" /> Reset week</label>
+        <label style="display:flex; gap:6px; align-items:center; font-size:13px;"><input type="checkbox" id="simSubmit" /> Mark Submitted</label>
+        <label style="display:flex; gap:6px; align-items:center; font-size:13px;"><input type="checkbox" id="simApprove" /> Mark Approved</label>
       </div>
       <div id="pipelineResult" style="margin-top:12px; padding:10px; background:#f8f9fa; border-radius:4px; display:none;">
         <pre id="pipelineOutput" style="margin:0; white-space:pre-wrap; font-size:12px;"></pre>
@@ -145,6 +151,7 @@ async function init(){
   // Report download buttons
   el('genWeekBtn').onclick = downloadWeekly;
   el('genMonthBtn').onclick = downloadMonthly;
+  el('simWeekBtn').onclick = simulateWeek;
   el('previewReconcileBtn').onclick = previewReconcile;
   el('closeMonthBtn').onclick = closeMonth;
 
@@ -160,6 +167,35 @@ async function init(){
   el('pipelineWeek').value = data.week_start;
   submittedCache = data.submitted;
   renderSubmitted(data.submitted);
+}
+
+async function simulateWeek(){
+  const week_start = el('pipelineWeek').value.trim();
+  if (!week_start) { alert('Enter week start date'); return; }
+  const reset = !!el('simReset').checked;
+  const submit = !!el('simSubmit').checked;
+  const approve = !!el('simApprove').checked;
+
+  if (!confirm(`Simulate week ${week_start}?\nReset: ${reset}\nSubmit: ${submit}\nApprove: ${approve}`)) return;
+
+  try {
+    showPipelineResult('Simulating week...');
+    const result = await api('/api/admin/simulate-week', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ week_start, reset, submit, approve })
+    });
+    const output = [
+      `🧪 Simulate Week: ${result.week_start}`,
+      `Created: ${result.created}`,
+      `Skipped: ${result.skipped}`,
+      `Deleted: ${result.deleted}`,
+      `Options: reset=${result.options.reset}, submit=${result.options.submit}, approve=${result.options.approve}`
+    ].join('\n');
+    showPipelineResult(output);
+  } catch (err) {
+    showPipelineResult(`❌ Error: ${err.message}`);
+  }
 }
 
 // Report download functions

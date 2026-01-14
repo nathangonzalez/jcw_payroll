@@ -543,6 +543,98 @@ app.post("/api/admin/seed", async (req, res) => {
   }
 });
 
+/** Admin: Simulate a week with sample entries (optional reset/submit/approve)
+ * POST /api/admin/simulate-week { week_start: 'YYYY-MM-DD', reset?: bool, submit?: bool, approve?: bool }
+ * If ADMIN_SECRET env var is set, client must send header 'x-admin-secret' or body.admin_secret matching it.
+ */
+app.post('/api/admin/simulate-week', (req, res) => {
+  try {
+    const adminSecret = process.env.ADMIN_SECRET;
+    const provided = req.headers['x-admin-secret'] || req.body?.admin_secret;
+    if (adminSecret && provided !== adminSecret) {
+      return res.status(403).json({ error: 'admin secret required' });
+    }
+
+    const { week_start, reset = false, submit = false, approve = false } = req.body || {};
+    if (!week_start || !/^\d{4}-\d{2}-\d{2}$/.test(week_start)) {
+      return res.status(400).json({ error: 'week_start=YYYY-MM-DD required' });
+    }
+
+    // Sample entries adapted from scripts/simulate.js
+    const SAMPLE_ENTRIES = [
+      { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 0 },
+      { employee: 'Chris Jacobi', customer: 'Hall', hours: 8, dayOffset: 1 },
+      { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 2 },
+      { employee: 'Chris Jacobi', customer: 'Bryan', hours: 10, dayOffset: 3 },
+      { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 4 },
+      { employee: 'Chris Z', customer: 'Hall', hours: 9, dayOffset: 0 },
+      { employee: 'Chris Z', customer: 'Bryan', hours: 8, dayOffset: 1 },
+      { employee: 'Chris Z', customer: 'McGill', hours: 7, dayOffset: 2 },
+      { employee: 'Chris Z', customer: 'Hall', hours: 8, dayOffset: 3 },
+      { employee: 'Chris Z', customer: 'Bryan', hours: 10, dayOffset: 4 },
+      { employee: 'Doug Kinsey', customer: 'McGill', hours: 10, dayOffset: 0 },
+      { employee: 'Doug Kinsey', customer: 'Hall', hours: 10, dayOffset: 1 },
+      { employee: 'Doug Kinsey', customer: 'Bryan', hours: 10, dayOffset: 2 },
+      { employee: 'Doug Kinsey', customer: 'McGill', hours: 10, dayOffset: 3 },
+      { employee: 'Doug Kinsey', customer: 'Hall', hours: 8, dayOffset: 4 },
+      { employee: 'Jafid Osorio', customer: 'Bryan', hours: 8, dayOffset: 0 },
+      { employee: 'Jafid Osorio', customer: 'McGill', hours: 8, dayOffset: 1 },
+      { employee: 'Jafid Osorio', customer: 'Hall', hours: 8, dayOffset: 2 },
+      { employee: 'Jafid Osorio', customer: 'Bryan', hours: 8, dayOffset: 3 },
+      { employee: 'Jafid Osorio', customer: 'McGill', hours: 8, dayOffset: 4 }
+    ];
+
+    // Find employees and customers
+    const employees = db.prepare('SELECT id, name FROM employees').all();
+    const customers = db.prepare('SELECT id, name FROM customers').all();
+    const empMap = new Map(employees.map(e => [e.name, e]));
+    const custMap = new Map(customers.map(c => [c.name, c]));
+
+    // Optionally delete existing entries for the week
+    const start = week_start;
+    const startDate = new Date(start);
+    const endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + 6);
+    const end = `${endDate.getFullYear()}-${String(endDate.getMonth()+1).padStart(2,'0')}-${String(endDate.getDate()).padStart(2,'0')}`;
+
+    let created = 0, skipped = 0, deleted = 0;
+    const now = new Date().toISOString();
+    const tx = db.transaction(() => {
+      if (reset) {
+        const del = db.prepare(`DELETE FROM time_entries WHERE work_date >= ? AND work_date <= ?`);
+        const r = del.run(start, end);
+        deleted = r.changes || 0;
+      }
+
+      for (const entry of SAMPLE_ENTRIES) {
+        const emp = empMap.get(entry.employee);
+        const cust = custMap.get(entry.customer);
+        if (!emp || !cust) { skipped++; continue; }
+
+        // compute work_date for this entry
+        const [y,m,d] = start.split('-').map(Number);
+        const workDate = new Date(y, m-1, d + entry.dayOffset);
+        const workDateYmd = `${workDate.getFullYear()}-${String(workDate.getMonth()+1).padStart(2,'0')}-${String(workDate.getDate()).padStart(2,'0')}`;
+
+        // avoid duplicate
+        const exists = db.prepare(`SELECT id FROM time_entries WHERE employee_id=? AND customer_id=? AND work_date=?`).get(emp.id, cust.id, workDateYmd);
+        if (exists) { skipped++; continue; }
+
+        const status = approve ? 'APPROVED' : (submit ? 'SUBMITTED' : 'DRAFT');
+        db.prepare(`INSERT INTO time_entries (id, employee_id, customer_id, work_date, hours, notes, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(id('te_'), emp.id, cust.id, workDateYmd, Number(entry.hours), '', status, now, now);
+        created++;
+      }
+    });
+    tx();
+
+    res.json({ ok: true, week_start, created, skipped, deleted, options: { reset, submit, approve } });
+  } catch (err) {
+    console.error('[admin/simulate-week]', err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
 /** Admin: Database stats */
 app.get("/api/admin/stats", (req, res) => {
   try {

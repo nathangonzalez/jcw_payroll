@@ -32,13 +32,14 @@
 
       <div class="row" style="margin-top:12px;">
         <div class="col" style="flex:2;">
-          <label class="small muted" for="customerName">Client</label>
-          <input id="customerName" list="customerList" placeholder="Start typing client..." autocomplete="off" style="font-size:1rem; padding:8px; width:100%" />
-          <datalist id="customerList"></datalist>
-          <!-- Keep a hidden select for compatibility with existing tests/scripts -->
-            <select id="customerSelect"></select>
-            <div id="customerAddress" class="small muted" style="margin-top:4px; font-style:italic;"></div>
-            <div id="customerConfirm" class="small muted" style="margin-top:4px; font-style:italic;"></div>
+          <label class="small muted" for="customerSelect">Client</label>
+          <!-- Primary customer dropdown (preferred) -->
+          <select id="customerSelect" title="Select customer"></select>
+          <!-- Legacy free-text input kept but hidden visually -->
+          <input id="customerName" list="customerList" placeholder="Start typing client..." autocomplete="off" style="font-size:1rem; padding:8px; width:100%; display:none" />
+          <datalist id="customerList" style="display:none"></datalist>
+          <div id="customerAddress" class="small muted" style="margin-top:4px; font-style:italic;"></div>
+          <div id="customerConfirm" class="small muted" style="margin-top:4px; font-style:italic;"></div>
         </div>
         <div class="col">
           <label class="small muted" for="day">Day</label>
@@ -51,6 +52,7 @@
       </div>
       <div class="row" style="margin-top:12px;">
         <div class="col"><button class="primary" id="saveBtn">Save / Update</button></div>
+        <div class="col"><button id="submitBtn">Submit Week</button></div>
       </div>
 
       <hr/>
@@ -195,6 +197,7 @@ async function init(){
   }
 
   el('saveBtn').onclick = saveEntry;
+  el('submitBtn').onclick = submitWeek;
 
   restoreDraft();
 
@@ -297,28 +300,34 @@ function updateCustomerAddress() {
 async function saveEntry(){
   if (!EMPLOYEE) { alert('Please select your name first'); return; }
   
-  const customerName = (el('customerName') && el('customerName').value || '').trim();
+  // Prefer selected customer from dropdown; fallback to free-text input
   let customer_id = null;
+  const selectedOption = el('customerSelect')?.options[el('customerSelect')?.selectedIndex];
+  const customerName = (el('customerName') && el('customerName').value || '').trim();
+  if (selectedOption && selectedOption.value) {
+    customer_id = selectedOption.value;
+  }
   const work_date = el('day').value;
   const hours = parseFloat(el('hours').value);
   
-  if (!customerName || !work_date || !isFinite(hours)) {
+  if ((!customer_id && !customerName) || !work_date || !isFinite(hours)) {
     alert('Enter a client name, pick a day, and enter hours');
     return;
   }
 
-  const existing = findCustomerByName(customerName);
-  if (existing) {
-    customer_id = existing.id;
-  } else {
-    // create it (free text, address optional)
-    const res = await api('/api/customers/find-or-create', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ name: customerName, address: '' })
-    });
-    customer_id = res.customer.id;
-    // refresh local customers cache
-    await refresh();
+  // If no selected id, try to find by name or create
+  if (!customer_id) {
+    const existing = findCustomerByName(customerName);
+    if (existing) {
+      customer_id = existing.id;
+    } else {
+      const res = await api('/api/customers/find-or-create', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ name: customerName, address: '' })
+      });
+      customer_id = res.customer.id;
+      await refresh();
+    }
   }
   
   await api('/api/time-entries', {
