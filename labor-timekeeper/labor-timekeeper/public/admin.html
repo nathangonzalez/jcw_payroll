@@ -40,26 +40,6 @@
       </div>
 
       <hr/>
-
-      <h2>Invoice Export</h2>
-      <div class="row">
-        <div class="col">
-          <label class="small muted">Customer</label>
-          <select id="customer"></select>
-        </div>
-        <div class="col">
-          <label class="small muted">Start</label>
-          <input id="start" placeholder="YYYY-MM-DD" />
-        </div>
-        <div class="col">
-          <label class="small muted">End</label>
-          <input id="end" placeholder="YYYY-MM-DD" />
-        </div>
-      </div>
-      <div class="row" style="margin-top:12px;">
-        <div class="col"><button id="exportInvoiceBtn" class="primary">Download Invoice Workbook</button></div>
-      </div>
-
       <p class="muted small" id="msg"></p>
     </div>
   </div>
@@ -82,23 +62,19 @@ async function init(){
   if (!me.is_admin) { alert('Admin only'); location.href='/app'; return; }
   el('who').textContent = `Logged in as ${me.name} (admin)`;
 
-  const customers = await api('/api/customers');
-  el('customer').innerHTML = customers.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
-
   el('loadBtn').onclick = loadSubmitted;
   el('approveBtn').onclick = approveSelected;
   el('exportMonthBtn').onclick = exportMonth;
-  el('exportInvoiceBtn').onclick = exportInvoice;
 
   // default week start: ask server by loading approvals once without week
-  const data = await api('/api/approvals');
+  const data = await api('/api/approvals?_=' + Date.now());
   el('weekStart').value = data.week_start;
   submittedCache = data.submitted;
   renderSubmitted(data.submitted);
 }
 async function loadSubmitted(){
   const week_start = el('weekStart').value.trim();
-  const data = await api('/api/approvals?week_start=' + encodeURIComponent(week_start));
+  const data = await api('/api/approvals?week_start=' + encodeURIComponent(week_start) + '&_=' + Date.now());
   submittedCache = data.submitted;
   renderSubmitted(data.submitted);
 }
@@ -147,13 +123,7 @@ function exportMonth(){
   window.location.href = `/api/export/monthly?month=${encodeURIComponent(ym)}`;
 }
 
-function exportInvoice(){
-  const customer_id = el('customer').value;
-  const start = el('start').value.trim();
-  const end = el('end').value.trim();
-  if (!customer_id || !start || !end) { alert('Pick customer and start/end dates'); return; }
-  window.location.href = `/api/export/invoice?customer_id=${encodeURIComponent(customer_id)}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
-}
+// Invoice export removed
 
 init().catch(e=>{
   console.error(e);

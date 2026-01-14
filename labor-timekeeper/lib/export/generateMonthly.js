@@ -77,10 +77,23 @@ export async function generateMonthlyExport({ db, month }) {
     ORDER BY te.work_date ASC, c.name ASC, e.name ASC
   `).all(monthStart, nextMonth);
 
-  // Group entries by week (Sunday start)
+  // Normalize DB rows to the shape expected by sheet builders and group by week (Sunday start)
   const byWeek = new Map();
-  for (const row of entries) {
-    const weekSunday = getWeekSunday(row.work_date);
+  for (const r of entries) {
+    const row = {
+      // normalized fields expected by buildWeeklySheet
+      date: r.work_date,
+      empName: r.employee_name,
+      empId: r.emp_id,
+      custName: r.customer_name,
+      custId: r.cust_id,
+      hours: Number(r.hours),
+      notes: r.notes || '',
+      // assign category using classification helper
+      category: getEmployeeCategory(r.employee_name)
+    };
+
+    const weekSunday = getWeekSunday(row.date);
     if (!byWeek.has(weekSunday)) byWeek.set(weekSunday, []);
     byWeek.get(weekSunday).push(row);
   }
@@ -89,27 +102,48 @@ export async function generateMonthlyExport({ db, month }) {
   // Create workbook
   const workbook = new ExcelJS.Workbook();
 
-  // Create a sheet for each week using the original weekly sheet logic
+  // Track weekly totals for summary sheet formulas
+  const weeklyTotals = [];
+
+  // Create a sheet for each week using the weekly sheet builder
   for (const weekSunday of sortedWeeks) {
     const weekEntries = byWeek.get(weekSunday);
     const sheetName = formatWeekName(weekSunday);
     const ws = workbook.addWorksheet(sheetName);
     setupWeeklyColumns(ws);
-    buildWeeklySheet(db, ws, weekEntries);
+    const result = buildWeeklySheet(db, ws, weekEntries);
+    // result contains weekTotal and weekTotalRow to reference in summary
+    weeklyTotals.push({
+      sheetName,
+      weekTotalRow: result.weekTotalRow,
+      hourlyTotal: result.hourlyTotal,
+      adminTotal: result.adminTotal,
+      weekTotal: result.weekTotal
+    });
   }
 
-  // Add the monthly summary as the last sheet (raw format, not pivoted)
-  const allEntries = entries;
+  // Add the monthly summary as the last sheet with formulas referencing weekly sheets
   const summarySheet = workbook.addWorksheet("Monthly Summary");
-  setupWeeklyColumns(summarySheet);
-  buildWeeklySheet(db, summarySheet, allEntries);
+  buildSummarySheet(summarySheet, weeklyTotals, month);
 
   // Save file
   const filename = `Payroll_Breakdown_${month}.xlsx`;
   const filepath = path.join(outputDir, filename);
   await workbook.xlsx.writeFile(filepath);
 
-  return { filepath, filename, outputDir };
+  // Aggregate totals
+  const totals = weeklyTotals.reduce((acc, w) => {
+    acc.hourlyTotal += Number(w.hourlyTotal || 0);
+    acc.adminTotal += Number(w.adminTotal || 0);
+    acc.grandTotal += Number(w.weekTotal || 0);
+    return acc;
+  }, { hourlyTotal: 0, adminTotal: 0, grandTotal: 0 });
+
+  // Counts
+  const customersCount = new Set(entries.map(r => r.customer_name)).size;
+  const employeesCount = new Set(entries.map(r => r.employee_name)).size;
+
+  return { filepath, filename, outputDir, totals: { customers: customersCount, employees: employeesCount, hourlyTotal: round2(totals.hourlyTotal), adminTotal: round2(totals.adminTotal), grandTotal: round2(totals.grandTotal) } };
 }
 
 /**

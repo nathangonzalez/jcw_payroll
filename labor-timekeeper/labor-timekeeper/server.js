@@ -10,7 +10,7 @@ import { openDb, id } from "./lib/db.js";
 import { requireAuth, requireAdmin, cookieName, createSession, destroySession, verifyPin } from "./lib/auth.js";
 import { weekStartYMD, weekDates, todayYMD } from "./lib/time.js";
 import { transcribeAudio, parseVoiceCommand } from "./lib/voice.js";
-import { buildMonthlyWorkbook, buildInvoiceWorkbook } from "./lib/export_excel.js";
+import { buildMonthlyWorkbook } from "./lib/export_excel.js";
 
 const app = express();
 const db = openDb();
@@ -209,25 +209,7 @@ app.get("/api/export/monthly", requireAdmin(db), async (req, res) => {
   }
 });
 
-app.get("/api/export/invoice", requireAdmin(db), async (req, res) => {
-  try {
-    const customerId = String(req.query.customer_id || "");
-    const start = String(req.query.start || "");
-    const end = String(req.query.end || "");
-    if (!customerId || !/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
-      return res.status(400).json({ error: "customer_id, start=YYYY-MM-DD, end=YYYY-MM-DD required" });
-    }
-
-    const wb = await buildInvoiceWorkbook({ db, customerId, startYmd: start, endYmd: end });
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="Invoice ${customerId} ${start} to ${end}.xlsx"`);
-    await wb.xlsx.write(res);
-    res.end();
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: String(err?.message || err) });
-  }
-});
+// Invoice export removed - not used in Option A workflow
 
 /** SPA fallbacks */
 app.get("/", (req, res) => res.sendFile(path.resolve("public/index.html")));

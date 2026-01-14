@@ -155,7 +155,7 @@ async function init(){
   el('closeMonth').value = ym;
 
   // default week start: ask server by loading approvals once without week
-  const data = await api('/api/approvals');
+  const data = await api('/api/approvals?_=' + Date.now());
   el('weekStart').value = data.week_start;
   el('pipelineWeek').value = data.week_start;
   submittedCache = data.submitted;
@@ -260,7 +260,7 @@ function showPipelineResult(text) {
 
 async function loadSubmitted(){
   const week_start = el('weekStart').value.trim();
-  const data = await api('/api/approvals?week_start=' + encodeURIComponent(week_start));
+  const data = await api('/api/approvals?week_start=' + encodeURIComponent(week_start) + '&_=' + Date.now());
   submittedCache = data.submitted;
   renderSubmitted(data.submitted);
 }
