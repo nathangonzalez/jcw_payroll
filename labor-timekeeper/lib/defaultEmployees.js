@@ -1,6 +1,6 @@
 export const DEFAULT_EMPLOYEES = [
-  { name: "Chris Jacobi", pin: "1111", role: "admin", aliases: [], default_bill_rate: 150, default_pay_rate: 75 },
-  { name: "Chris Zavesky", pin: "2222", role: "admin", aliases: ["Chris Z", "Chris Z."], default_bill_rate: 140, default_pay_rate: 70 },
+  { name: "Chris Jacobi", pin: "1111", role: "admin", aliases: [], default_bill_rate: 100, default_pay_rate: null },
+  { name: "Chris Zavesky", pin: "2222", role: "admin", aliases: ["Chris Z", "Chris Z."], default_bill_rate: 100, default_pay_rate: null },
   { name: "Boban Abbate", pin: "3333", role: "hourly", aliases: [], default_bill_rate: 110, default_pay_rate: 35 },
   { name: "Jason Green", pin: "4444", role: "hourly", aliases: [], default_bill_rate: 100, default_pay_rate: 30 },
   { name: "Thomas Brinson", pin: "5555", role: "hourly", aliases: [], default_bill_rate: 95, default_pay_rate: 28 },

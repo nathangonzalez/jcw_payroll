@@ -112,3 +112,8 @@ Invoke-RestMethod -Uri "$baseUrl/api/admin/seed" -Method POST
 [2026-01-15T18:27:49.662Z] [startup] ensureEmployees checked
 [2026-01-15T18:48:08.890Z] [startup] migrate completed
 [2026-01-15T18:48:08.891Z] [startup] ensureEmployees checked
+[2026-01-15T19:13:32.365Z] applied default rates script run (updated DB rates from `lib/defaultEmployees.js`)
+[2026-01-15T19:14:00.000Z] note: user will reinstall VSCode; pulling from `persist.txt` after reinstall
+[2026-01-15T19:16:47.629Z] updated rates for Chris Jacobi (emp_gp9ks7wq) to 100/0
+[2026-01-15T19:16:47.629Z] updated rates for Chris Zavesky (emp_vkpewt2y) to 100/0
+[2026-01-15T19:16:47.630Z] note: requested default_pay_rate blank for Chris entries, but DB schema requires NOT NULL; set to 0 as fallback
