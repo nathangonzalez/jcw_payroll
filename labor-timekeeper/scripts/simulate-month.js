@@ -120,66 +120,111 @@ async function main() {
   console.log(`Loaded ${employees.length} employees, ${customers.length} customers`);
   console.log();
 
-  // Generate entries for each employee
+  // Generate entries for each employee across each week of the month
   let totalEntries = 0;
   let totalHours = 0;
 
-  for (const pattern of EMPLOYEE_PATTERNS) {
-    const emp = empMap.get(pattern.name);
-    if (!emp) {
-      console.log(`[SKIP] Employee not found: ${pattern.name}`);
-      continue;
-    }
+  // Build list of week starts (Mondays) that intersect the month
+  const weekStarts = new Set();
+  let cur = new Date(firstDay);
+  while (cur <= lastDay) {
+    weekStarts.add(getWeekStart(formatYmd(cur)));
+    cur.setDate(cur.getDate() + 7);
+  }
+  const weeks = [...weekStarts].sort();
 
-    console.log(`[${pattern.name}] Generating entries...`);
-    
+  // Ensure a PTO customer exists so PTO can be recorded as its own customer
+  let ptoCust = db.prepare("SELECT * FROM customers WHERE name = ?").get('PTO');
+  if (!ptoCust) {
+    const pid = id('cust_');
+    db.prepare("INSERT INTO customers (id, name, address, created_at) VALUES (?, ?, ?, datetime('now'))").run(pid, 'PTO', '', );
+    ptoCust = db.prepare("SELECT * FROM customers WHERE id = ?").get(pid);
+  }
+
+  for (const emp of employees) {
+    console.log(`[${emp.name}] Generating weekly entries (${weeks.length} weeks)...`);
     let empEntries = 0;
     let empHours = 0;
-    
-    // Iterate through each day of the month
-    for (let day = 1; day <= lastDay.getDate(); day++) {
-      const date = new Date(year, monthNum - 1, day);
-      const dow = date.getDay(); // 0=Sun, 6=Sat
-      const dateYmd = formatYmd(date);
-      
-      // Skip weekends
-      if (dow === 0 || dow === 6) continue;
-      
-      // Skip holidays (unless occasional work)
-      if (holidayDates.has(dateYmd)) {
-        // 20% chance of working on holiday
-        if (Math.random() > 0.2) continue;
+
+    // Choose at least 5 distinct customers for this employee
+    const shuffled = customers.slice().sort(() => Math.random() - 0.5);
+    const selectedCustomers = shuffled.slice(0, Math.max(5, Math.min(10, shuffled.length)));
+
+    for (const weekStart of weeks) {
+      // Build weekday dates for this week (Mon-Fri) within the month range
+      const [wy, wm, wd] = weekStart.split('-').map(Number);
+      const weekDates = [];
+      for (let d = 0; d < 7; d++) {
+        const date = new Date(wy, wm - 1, wd);
+        date.setDate(date.getDate() + d);
+        const ymd = formatYmd(date);
+        if (date < firstDay || date > lastDay) continue;
+        const dow = date.getDay();
+        if (dow === 0 || dow === 6) continue; // only weekdays
+        weekDates.push(ymd);
       }
-      
-      // Random chance of working this day based on pattern
-      const workChance = pattern.daysPerWeek / 5;
-      if (Math.random() > workChance) continue;
-      
-      // Calculate hours for this day
-      const variance = (Math.random() - 0.5) * 2 * pattern.variance;
-      const hours = Math.max(4, Math.min(12, Math.round((pattern.avgHoursPerDay + variance) * 2) / 2));
-      
-      // Pick a random customer (weighted)
-      const customer = weightedCustomers[Math.floor(Math.random() * weightedCustomers.length)];
-      
-      // Check if entry exists
-      const existing = db.prepare(`
-        SELECT id FROM time_entries 
-        WHERE employee_id = ? AND customer_id = ? AND work_date = ?
-      `).get(emp.id, customer.id, dateYmd);
-      
-      if (existing) continue;
-      
-      // Create entry (directly as APPROVED for export testing)
-      db.prepare(`
-        INSERT INTO time_entries (id, employee_id, customer_id, work_date, hours, notes, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, 'APPROVED', datetime('now'), datetime('now'))
-      `).run(id("te_"), emp.id, customer.id, dateYmd, hours, "", );
-      
-      empEntries++;
-      empHours += hours;
+      if (weekDates.length === 0) continue;
+
+      // Decide weekly target: mostly 40, sometimes PTO week (~12%) or overtime (~12%)
+      let targetHours = 40;
+      const roll = Math.random();
+      if (roll < 0.12) targetHours = 32; // PTO-heavy week
+      else if (roll >= 0.12 && roll < 0.24) targetHours = 45; // overtime week
+
+      // Distribute hours across available weekdays
+      const base = Math.floor((targetHours / weekDates.length) * 2) / 2; // 0.5 increments
+      let remaining = Math.round((targetHours - base * weekDates.length) * 2) / 2;
+      const dailyHours = weekDates.map(() => base);
+      // Sprinkle remaining 0.5 increments across random days
+      while (remaining > 0.001) {
+        const idx = Math.floor(Math.random() * dailyHours.length);
+        dailyHours[idx] += 0.5;
+        remaining = Math.round((targetHours - dailyHours.reduce((a,b) => a+b,0)) * 2) / 2;
+      }
+
+      // If PTO week, convert one random day to PTO and mark as such (use PTO customer)
+      if (targetHours === 32) {
+        const pidx = Math.floor(Math.random() * dailyHours.length);
+        const ptoHours = Math.min(8, dailyHours[pidx]);
+        dailyHours[pidx] = ptoHours; // PTO hours remain but recorded under PTO customer
+      }
+
+      // Ensure at least 5 customers are used across the week where possible
+      const customersForWeek = selectedCustomers.slice(0, Math.min(selectedCustomers.length, weekDates.length));
+
+      // Insert entries for each weekday
+      for (let i = 0; i < weekDates.length; i++) {
+        const dateYmd = weekDates[i];
+
+        // Skip holidays with 80% chance
+        if (holidayDates.has(dateYmd) && Math.random() > 0.2) continue;
+
+        const hours = dailyHours[i];
+        if (hours <= 0) continue;
+
+        // Choose customer: for PTO day use PTO customer, otherwise rotate through customersForWeek
+        let cust = customersForWeek[i % customersForWeek.length];
+        if (targetHours === 32 && Math.random() < 0.25) {
+          // Occasionally mark an extra day PTO
+          cust = ptoCust;
+        }
+
+        // Avoid duplicate entry
+        const existing = db.prepare(`
+          SELECT id FROM time_entries WHERE employee_id = ? AND customer_id = ? AND work_date = ?
+        `).get(emp.id, cust.id, dateYmd);
+        if (existing) continue;
+
+        db.prepare(`
+          INSERT INTO time_entries (id, employee_id, customer_id, work_date, hours, notes, status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, 'APPROVED', datetime('now'), datetime('now'))
+        `).run(id('te_'), emp.id, cust.id, dateYmd, hours, cust.name === 'PTO' ? 'PTO' : '', );
+
+        empEntries++;
+        empHours += hours;
+      }
     }
-    
+
     console.log(`  Created ${empEntries} entries, ${empHours} hours`);
     totalEntries += empEntries;
     totalHours += empHours;

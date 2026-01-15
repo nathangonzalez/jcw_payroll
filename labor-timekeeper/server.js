@@ -6,6 +6,8 @@ import multer from "multer";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from 'url';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 import { openDb, id } from "./lib/db.js";
 import { weekStartYMD, weekDates, todayYMD } from "./lib/time.js";
 import { transcribeAudio, parseVoiceCommand } from "./lib/voice.js";
@@ -48,7 +50,6 @@ if (process.env.NODE_ENV === 'production') {
 
 // Resolve directories relative to this module so the server works
 // even when started from a different current working directory.
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const EXPORT_DIR = path.join(__dirname, 'exports');
 const SEED_DIR = path.join(__dirname, 'seed');
