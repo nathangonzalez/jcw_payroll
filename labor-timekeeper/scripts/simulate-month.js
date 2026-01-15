@@ -125,13 +125,15 @@ async function main() {
   let totalHours = 0;
 
   // Build list of week starts (Mondays) that intersect the month
-  const weekStarts = new Set();
-  let cur = new Date(firstDay);
-  while (cur <= lastDay) {
-    weekStarts.add(getWeekStart(formatYmd(cur)));
-    cur.setDate(cur.getDate() + 7);
+  const weeks = [];
+  // start from the Monday of the first day of the month
+  const firstWeekStart = getWeekStart(monthStart);
+  let wsDate = new Date(firstWeekStart);
+  const lastWeekStart = getWeekStart(monthEnd);
+  while (formatYmd(wsDate) <= lastWeekStart) {
+    weeks.push(formatYmd(wsDate));
+    wsDate.setDate(wsDate.getDate() + 7);
   }
-  const weeks = [...weekStarts].sort();
 
   // Ensure a PTO customer exists so PTO can be recorded as its own customer
   let ptoCust = db.prepare("SELECT * FROM customers WHERE name = ?").get('PTO');
@@ -151,6 +153,7 @@ async function main() {
     const selectedCustomers = shuffled.slice(0, Math.max(5, Math.min(10, shuffled.length)));
 
     for (const weekStart of weeks) {
+      let weekCreated = 0;
       // Build weekday dates for this week (Mon-Fri) within the month range
       const [wy, wm, wd] = weekStart.split('-').map(Number);
       const weekDates = [];
@@ -228,7 +231,9 @@ async function main() {
 
         empEntries++;
         empHours += hours;
+        weekCreated++;
       }
+      if (weekCreated > 0) console.log(`    ${weekStart}: created ${weekCreated} entries`);
     }
 
     console.log(`  Created ${empEntries} entries, ${empHours} hours`);

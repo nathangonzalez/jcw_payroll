@@ -97,3 +97,18 @@ Invoke-RestMethod -Uri "$baseUrl/api/admin/seed" -Method POST
 - /tmp is ephemeral on App Engine - database auto-restores from Cloud Storage
 - Backup runs every 5 minutes in production
 - Use reconciliation feature to archive months before clearing
+[2026-01-15T18:12:02.223Z] [startup] migrate completed
+[2026-01-15T18:12:02.227Z] [startup] ensureEmployees checked
+[2026-01-15T18:25:59.024Z] updated rates for Boban Abbate (emp_ga4rqytu) to 110/35
+[2026-01-15T18:25:59.025Z] updated rates for Chris Jacobi (emp_35u1tnme) to 150/75
+[2026-01-15T18:25:59.025Z] updated rates for Chris Zavesky (emp_jp4mlvog) to 140/70
+[2026-01-15T18:25:59.026Z] updated rates for Doug Kinsey (emp_yde33znx) to 92/29
+[2026-01-15T18:25:59.026Z] updated rates for Jason Green (emp_qhpjptqm) to 100/30
+[2026-01-15T18:25:59.026Z] updated rates for Phil Henderson (emp_75yd72zj) to 90/27
+[2026-01-15T18:25:59.027Z] updated rates for Sean Matthew (emp_emnnysju) to 88/26
+[2026-01-15T18:25:59.027Z] updated rates for Thomas Brinson (emp_4nlnrvy7) to 95/28
+[2026-01-15T18:27:24.974Z] generated weekly exports 2026-01-14: 3 files
+[2026-01-15T18:27:49.660Z] [startup] migrate completed
+[2026-01-15T18:27:49.662Z] [startup] ensureEmployees checked
+[2026-01-15T18:48:08.890Z] [startup] migrate completed
+[2026-01-15T18:48:08.891Z] [startup] ensureEmployees checked
