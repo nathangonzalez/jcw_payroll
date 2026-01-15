@@ -7,8 +7,9 @@
 #   3. Set project: gcloud config set project YOUR_PROJECT_ID
 #
 # Usage:
-#   ./deploy-gcloud.sh              # Deploy to App Engine
-#   ./deploy-gcloud.sh --seed       # Deploy and seed database
+#   ./deploy-gcloud.sh                    # Deploy to App Engine (promote)
+#   ./deploy-gcloud.sh --seed             # Deploy and then seed database
+#   ./deploy-gcloud.sh --patch            # Deploy as a patch (no-promote) so you can smoke-test before promoting
 
 set -e
 
@@ -44,7 +45,16 @@ npm ci --production
 
 # Deploy to App Engine
 echo "[2/3] Deploying to App Engine..."
-gcloud app deploy app.yaml --quiet
+# If --patch requested, deploy with a unique version and don't promote (safer patch flow)
+if [ "$1" == "--patch" ] || [ "$PATCH" == "1" ]; then
+    VERSION="patch-$(date +%s)"
+    echo "Patch deploy mode: version=$VERSION (no promote)"
+    gcloud app deploy app.yaml --project="$PROJECT" --version="$VERSION" --no-promote --quiet
+    echo "Deployed version $VERSION (not promoted). Test at the version URL shown by gcloud, then promote with:" 
+    echo "  gcloud app services set-traffic default --splits $VERSION=1 --project=$PROJECT --quiet"
+else
+    gcloud app deploy app.yaml --quiet
+fi
 
 # Get the deployed URL
 URL=$(gcloud app browse --no-launch-browser 2>/dev/null | tail -1)

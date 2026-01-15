@@ -10,6 +10,8 @@ env_variables:
   NODE_ENV: "production"
   DATABASE_PATH: "/tmp/app.db"
   GCS_BUCKET: "jcw-labor-timekeeper"
+  DB_BACKUP_NAME: "restored_app.db"
+  DISABLE_SCHEDULED_BACKUPS: "1"
   SMTP_HOST: "smtp.office365.com"
   SMTP_PORT: "587"
   EMAIL_TO: "nathan@jcwelton.com"

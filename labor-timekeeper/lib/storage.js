@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 const BUCKET_NAME = process.env.GCS_BUCKET || 'jcw-labor-timekeeper';
-const DB_BACKUP_NAME = 'app.db';
+const DB_BACKUP_NAME = process.env.DB_BACKUP_NAME || 'app.db';
 const ARCHIVE_FOLDER = 'archives';
 
 let storage;
@@ -176,6 +176,12 @@ export async function backupToCloud(dbPath) {
     return false;
   }
 
+  // Allow disabling scheduled/backups during recovery/deploy by setting DISABLE_SCHEDULED_BACKUPS=1
+  if (process.env.DISABLE_SCHEDULED_BACKUPS === '1') {
+    console.log('[storage] Cloud backups disabled by DISABLE_SCHEDULED_BACKUPS=1');
+    return false;
+  }
+
   try {
     if (!fs.existsSync(dbPath)) {
       console.log('[storage] No database file to backup');
@@ -205,6 +211,11 @@ export async function backupToCloud(dbPath) {
  */
 export function scheduleBackups(dbPath, intervalMs = 5 * 60 * 1000) {
   if (process.env.NODE_ENV !== 'production') {
+    return;
+  }
+
+  if (process.env.DISABLE_SCHEDULED_BACKUPS === '1') {
+    console.log('[storage] Scheduled backups disabled by DISABLE_SCHEDULED_BACKUPS=1');
     return;
   }
   

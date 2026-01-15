@@ -54,6 +54,11 @@
         <div class="col"><button class="primary" id="saveBtn">Save / Update</button></div>
         <div class="col"><button id="submitBtn">Submit Week</button></div>
       </div>
+      <div class="row" style="margin-top:8px; gap:8px; align-items:center;">
+        <label style="display:flex; gap:6px; align-items:center; font-size:13px;"><input type="checkbox" id="seedToggle" /> Allow seeding</label>
+        <button id="seedBtn" style="display:none;">Seed Week</button>
+      </div>
+      <div class="small muted" style="margin-top:6px;">Saving will update an existing entry for the same day and client (if present).</div>
 
       <hr/>
 
@@ -135,8 +140,16 @@ function restoreDraft() {
 }
 
 async function init(){
-  // Load employees for selector
+  // Load employees for selector and exclude internal/test or admin accounts we don't want in the dropdown
   EMPLOYEES = await api('/api/employees');
+  // Exclude internal/test accounts and admin placeholders from the employee selector
+  EMPLOYEES = EMPLOYEES.filter(e => {
+    const lower = (e.name || '').toLowerCase();
+    if (lower.includes('jafid')) return false;
+    if (lower.includes('chris z') || lower.includes('chris zavesky')) return false;
+    if (lower.includes('office admin')) return false;
+    return true;
+  });
   el('employee').innerHTML = '<option value="">-- Select your name --</option>' + 
     EMPLOYEES.map(e => `<option value="${e.id}">${e.name}</option>`).join('');
 
@@ -144,9 +157,12 @@ async function init(){
   const savedEmpId = localStorage.getItem(EMPLOYEE_KEY);
   if (savedEmpId) {
     const emp = EMPLOYEES.find(e => e.id === savedEmpId);
+    // If saved employee was excluded, clear saved selection
     if (emp) {
       el('employee').value = savedEmpId;
       EMPLOYEE = emp;
+    } else {
+      localStorage.removeItem(EMPLOYEE_KEY);
     }
   }
 
@@ -169,6 +185,14 @@ async function init(){
 
   // Load customers into datalist for free-text client input
   CUSTOMERS = await api('/api/customers');
+  // Filter out obvious test/api placeholder customers
+  CUSTOMERS = CUSTOMERS.filter(c => {
+    const n = (c.name || '').toLowerCase();
+    if (n.startsWith('test')) return false;
+    if (n.includes('api test')) return false;
+    if (n.includes('placeholder')) return false;
+    return true;
+  });
   el('customerList').innerHTML = CUSTOMERS.map(c => {
     const label = c.address ? `${c.name} — ${c.address}` : c.name;
     return `<option value="${c.name}" data-id="${c.id}" data-address="${c.address || ''}">${label}</option>`;
@@ -198,8 +222,24 @@ async function init(){
 
   el('saveBtn').onclick = saveEntry;
   el('submitBtn').onclick = submitWeek;
+  const seedBtn = el('seedBtn'); if (seedBtn) seedBtn.onclick = seedEmployeeWeek;
 
-  restoreDraft();
+  // Seed toggle: keep seed button hidden unless explicitly enabled
+  const seedToggle = el('seedToggle');
+  if (seedToggle) {
+    try { seedToggle.checked = false; } catch(e){}
+    const toggleSeedBtn = () => {
+      const btn = el('seedBtn'); if (!btn) return;
+      btn.style.display = seedToggle.checked ? 'inline-block' : 'none';
+    };
+    seedToggle.onchange = toggleSeedBtn;
+    toggleSeedBtn();
+  }
+
+  // Default to clean forms on load (don't auto-restore drafts)
+  // If you want draft restore later, call `restoreDraft()` manually from the console
+  if (el('customerName')) el('customerName').value = '';
+  if (el('hours')) el('hours').value = '';
 
   ['customerName', 'day', 'hours'].forEach(id => {
     if (el(id)) {
@@ -209,6 +249,23 @@ async function init(){
   });
 
   await setupRecorder();
+}
+
+async function seedEmployeeWeek(){
+  if (!EMPLOYEE) { alert('Select your name first'); return; }
+  const allow = el('seedToggle') && el('seedToggle').checked;
+  if (!allow) { alert('Check "Allow seeding" to enable this action'); return; }
+  if (!confirm('Seed sample hours for your current week as DRAFT?')) return;
+  try {
+    const res = await api('/api/admin/simulate-employee', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ employee_id: EMPLOYEE.id, week_start: WEEK.week_start, reset: false, submit: false })
+    });
+    alert(`Seeded: ${res.created || 0} entries (skipped ${res.skipped || 0})`);
+    await loadWeek();
+  } catch (err) {
+    alert('Seed failed: ' + err.message);
+  }
 }
 
 async function loadWeek(){
@@ -231,11 +288,13 @@ function renderEntries(entries){
       : e.status==='SUBMITTED'
         ? '<span class="badge">SUBMITTED</span>'
         : '<span class="badge">DRAFT</span>';
+    // show a delete control for DRAFT entries so employee can remove before submission
+    const deleteBtn = (e.status === 'DRAFT') ? `<button class="small" onclick="deleteEntry('${e.id}')" title="Delete draft">✖</button>` : '';
     return `<tr>
       <td>${e.work_date}</td>
       <td>${e.customer_name}</td>
       <td>${fmt(Number(e.hours))}</td>
-      <td>${badge}</td>
+      <td style="display:flex; gap:8px; align-items:center;">${badge} ${deleteBtn}</td>
     </tr>`;
   }).join('');
   el('entries').innerHTML = `
@@ -244,6 +303,21 @@ function renderEntries(entries){
       <tbody>${rows}</tbody>
     </table>
   `;
+}
+
+async function deleteEntry(teId){
+  if (!EMPLOYEE) { alert('Select your name first'); return; }
+  if (!confirm('Delete this DRAFT entry? This cannot be undone.')) return;
+  try {
+    await api(`/api/time-entries/${teId}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ employee_id: EMPLOYEE.id })
+    });
+    await refresh();
+  } catch (err) {
+    alert('Delete failed: ' + err.message);
+  }
 }
 
 async function refresh(){
@@ -340,6 +414,16 @@ async function saveEntry(){
   el('customerConfirm').textContent = '';
   clearDraft();
   await refresh();
+  // If the employee enabled seeding, automatically seed the rest of the week
+  try {
+    const allowSeed = el('seedToggle') && el('seedToggle').checked;
+    if (allowSeed) {
+      // run seeding but do not block the UI; show a notification after
+      seedEmployeeWeek();
+    }
+  } catch (err) {
+    console.warn('Auto-seed failed', err);
+  }
 }
 
 async function submitWeek(){

@@ -1,0 +1,50 @@
+{"version":8,"type":"context-options","origin":"testRunner","browserName":"","playwrightVersion":"1.57.0","options":{},"platform":"win32","wallTime":1768397880356,"monotonicTime":72580.13,"sdkLanguage":"javascript"}
+{"type":"before","callId":"hook@1","stepId":"hook@1","startTime":72581.291,"class":"Test","method":"hook","title":"Before Hooks","params":{},"stack":[]}
+{"type":"before","callId":"fixture@27","stepId":"fixture@27","parentId":"hook@1","startTime":72586.25,"class":"Test","method":"fixture","title":"Fixture \"context\"","params":{},"stack":[]}
+{"type":"before","callId":"pw:api@28","stepId":"pw:api@28","parentId":"fixture@27","startTime":72586.821,"class":"Test","method":"pw:api","title":"Create context","params":{"acceptDownloads":"accept","bypassCSP":"false","colorScheme":"light","hasTouch":"false","ignoreHTTPSErrors":"false","isMobile":"false","javaScriptEnabled":"true","locale":"en-US","offline":"false","viewport":"Object","baseURL":"http://localhost:3000","serviceWorkers":"allow","selectorEngines":"[]","testIdAttributeName":"data-testid","noDefaultViewport":"false","extraHTTPHeaders":"undefined","storageState":"undefined","reducedMotion":"undefined","forcedColors":"undefined","contrast":"undefined","clientCertificates":"undefined"},"stack":[]}
+{"type":"stderr","timestamp":72586.903,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m=> browser.newContext started \u001b[38;5;45m+123ms\u001b[0m\n"}
+{"type":"stderr","timestamp":73443.465,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"commit\" event fired \u001b[38;5;45m+856ms\u001b[0m\n"}
+{"type":"stderr","timestamp":73445.773,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"domcontentloaded\" event fired \u001b[38;5;45m+2ms\u001b[0m\n"}
+{"type":"stderr","timestamp":73445.885,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"load\" event fired \u001b[38;5;45m+1ms\u001b[0m\n"}
+{"type":"stderr","timestamp":73502.955,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"commit\" event fired \u001b[38;5;45m+57ms\u001b[0m\n"}
+{"type":"stderr","timestamp":73503.016,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  navigated to \"https://playwright/index.html\" \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":73629.518,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"domcontentloaded\" event fired \u001b[38;5;45m+126ms\u001b[0m\n"}
+{"type":"stderr","timestamp":73630.007,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"load\" event fired \u001b[38;5;45m+1ms\u001b[0m\n"}
+{"type":"stderr","timestamp":73634.002,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m<= browser.newContext succeeded \u001b[38;5;45m+3ms\u001b[0m\n"}
+{"type":"after","callId":"pw:api@28","endTime":73634.135,"annotations":[]}
+{"type":"after","callId":"fixture@27","endTime":73639.195,"annotations":[]}
+{"type":"before","callId":"fixture@29","stepId":"fixture@29","parentId":"hook@1","startTime":73639.984,"class":"Test","method":"fixture","title":"Fixture \"page\"","params":{},"stack":[]}
+{"type":"before","callId":"pw:api@30","stepId":"pw:api@30","parentId":"fixture@29","startTime":73642.02,"class":"Test","method":"pw:api","title":"Create page","params":{},"stack":[]}
+{"type":"stderr","timestamp":73642.126,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m=> browserContext.newPage started \u001b[38;5;45m+9ms\u001b[0m\n"}
+{"type":"stderr","timestamp":73843.405,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m<= browserContext.newPage succeeded \u001b[38;5;45m+201ms\u001b[0m\n"}
+{"type":"after","callId":"pw:api@30","endTime":73843.448,"annotations":[]}
+{"type":"after","callId":"fixture@29","endTime":73843.521,"annotations":[]}
+{"type":"after","callId":"hook@1","endTime":73843.558,"annotations":[]}
+{"type":"before","callId":"pw:api@31","stepId":"pw:api@31","startTime":73846.576,"class":"Test","method":"pw:api","title":"Navigate to \"/app\"","params":{"url":"http://localhost:3000/app","waitUntil":"load","timeout":"0"},"stack":[{"file":"C:\\Users\\natha\\dev\\repos\\jcw_payroll\\labor-timekeeper\\tests\\labor-timekeeper.spec.cjs","line":20,"column":16}]}
+{"type":"stderr","timestamp":73846.774,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m=> page.goto started \u001b[38;5;45m+3ms\u001b[0m\n"}
+{"type":"stderr","timestamp":74231.47,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"networkidle\" event fired \u001b[38;5;45m+385ms\u001b[0m\n"}
+{"type":"stderr","timestamp":74300.404,"text":"  \u001b[38;5;45;1mpw:api \u001b[0mnavigating to \"http://localhost:3000/app\", waiting until \"load\" \u001b[38;5;45m+69ms\u001b[0m\n"}
+{"type":"stderr","timestamp":74342.659,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"commit\" event fired \u001b[38;5;45m+42ms\u001b[0m\n"}
+{"type":"stderr","timestamp":74343.117,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  navigated to \"http://localhost:3000/app\" \u001b[38;5;45m+1ms\u001b[0m\n"}
+{"type":"stderr","timestamp":74374.511,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"domcontentloaded\" event fired \u001b[38;5;45m+31ms\u001b[0m\n"}
+{"type":"stderr","timestamp":74452.863,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"load\" event fired \u001b[38;5;45m+78ms\u001b[0m\n"}
+{"type":"stderr","timestamp":74485.172,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m<= page.goto succeeded \u001b[38;5;45m+33ms\u001b[0m\n"}
+{"type":"after","callId":"pw:api@31","endTime":74485.359,"annotations":[]}
+{"type":"before","callId":"pw:api@32","stepId":"pw:api@32","startTime":74489.098,"class":"Test","method":"pw:api","title":"Query count locator('#employee option')","params":{"selector":"#employee option"},"stack":[{"file":"C:\\Users\\natha\\dev\\repos\\jcw_payroll\\labor-timekeeper\\tests\\labor-timekeeper.spec.cjs","line":21,"column":60}]}
+{"type":"stderr","timestamp":74489.22,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m=> locator.count started \u001b[38;5;45m+4ms\u001b[0m\n"}
+{"type":"stderr","timestamp":74620.426,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m<= locator.count succeeded \u001b[38;5;45m+131ms\u001b[0m\n"}
+{"type":"after","callId":"pw:api@32","endTime":74620.551,"annotations":[]}
+{"type":"before","callId":"expect@33","stepId":"expect@33","startTime":74622.295,"class":"Test","method":"expect","title":"Expect \"toBeGreaterThan\"","params":{"expected":"1"},"stack":[{"file":"C:\\Users\\natha\\dev\\repos\\jcw_payroll\\labor-timekeeper\\tests\\labor-timekeeper.spec.cjs","line":22,"column":21}]}
+{"type":"after","callId":"expect@33","endTime":74623.108,"annotations":[]}
+{"type":"before","callId":"hook@34","stepId":"hook@34","startTime":74623.555,"class":"Test","method":"hook","title":"After Hooks","params":{},"stack":[]}
+{"type":"before","callId":"fixture@35","stepId":"fixture@35","parentId":"hook@34","startTime":74624.386,"class":"Test","method":"fixture","title":"Fixture \"page\"","params":{},"stack":[]}
+{"type":"after","callId":"fixture@35","endTime":74624.481,"annotations":[]}
+{"type":"before","callId":"fixture@36","stepId":"fixture@36","parentId":"hook@34","startTime":74624.873,"class":"Test","method":"fixture","title":"Fixture \"context\"","params":{},"stack":[]}
+{"type":"before","callId":"pw:api@37","stepId":"pw:api@37","parentId":"fixture@36","startTime":74702.707,"class":"Test","method":"pw:api","title":"Close context","params":{"reason":"Test ended."},"stack":[]}
+{"type":"stderr","timestamp":74702.945,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m=> browserContext.close started \u001b[38;5;45m+83ms\u001b[0m\n"}
+{"type":"stderr","timestamp":74782.731,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m<= browserContext.close succeeded \u001b[38;5;45m+79ms\u001b[0m\n"}
+{"type":"after","callId":"pw:api@37","endTime":74782.93,"annotations":[]}
+{"type":"after","callId":"fixture@36","endTime":74783.108,"annotations":[]}
+{"type":"before","callId":"fixture@46","stepId":"fixture@46","parentId":"hook@34","startTime":74786.791,"class":"Test","method":"fixture","title":"Fixture \"baseURL\"","params":{},"stack":[{"file":"project#chromium","line":1,"column":1}],"group":"configuration"}
+{"type":"after","callId":"fixture@46","endTime":74786.816,"annotations":[]}
+{"type":"after","callId":"hook@34","endTime":74792.296,"annotations":[]}
