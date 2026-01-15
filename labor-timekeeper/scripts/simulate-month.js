@@ -196,18 +196,24 @@ async function main() {
       for (let i = 0; i < weekDates.length; i++) {
         const dateYmd = weekDates[i];
 
-        // Skip holidays with 80% chance
-        if (holidayDates.has(dateYmd) && Math.random() > 0.2) continue;
+          // (Do NOT skip holidays) ensure every weekday gets an entry
+          const hours = dailyHours[i];
+          if (hours <= 0) continue;
 
-        const hours = dailyHours[i];
-        if (hours <= 0) continue;
-
-        // Choose customer: for PTO day use PTO customer, otherwise rotate through customersForWeek
-        let cust = customersForWeek[i % customersForWeek.length];
-        if (targetHours === 32 && Math.random() < 0.25) {
-          // Occasionally mark an extra day PTO
-          cust = ptoCust;
-        }
+          // Choose customer: for PTO week ensure at least one PTO day, otherwise rotate through customersForWeek
+          // Guarantee customersForWeek contains at least 5 distinct customers (or repeats if DB smaller)
+          let customersForWeekAdjusted = customersForWeek.slice();
+          while (customersForWeekAdjusted.length < 5) {
+            // add random customers to reach 5
+            const extra = customers[Math.floor(Math.random() * customers.length)];
+            customersForWeekAdjusted.push(extra);
+          }
+          let cust = customersForWeekAdjusted[i % customersForWeekAdjusted.length];
+          if (targetHours === 32) {
+            // ensure at least one PTO day: deterministic choose first weekday of the week as PTO
+            const ptoIndex = 0;
+            if (i === ptoIndex) cust = ptoCust;
+          }
 
         // Avoid duplicate entry
         const existing = db.prepare(`
