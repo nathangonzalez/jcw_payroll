@@ -1,4 +1,5 @@
 import { DEFAULT_EMPLOYEES } from './defaultEmployees.js';
+import { persist } from './persist.js';
 
 function safeJsonArray(s) {
   try {
@@ -12,16 +13,32 @@ function safeJsonArray(s) {
 export function ensureEmployees(db) {
   try {
     const row = db.prepare('SELECT COUNT(*) AS n FROM employees').get();
-    if ((row?.n ?? 0) > 0) return { ok: true, inserted: 0 };
-
-    let inserted = 0;
     const now = new Date().toISOString();
     const insert = db.prepare(`INSERT INTO employees (id, name, default_bill_rate, default_pay_rate, is_admin, aliases_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`);
-    for (const e of DEFAULT_EMPLOYEES) {
-      const id = 'emp_' + Math.random().toString(36).slice(2, 10);
-      insert.run(id, e.name, 0, 0, e.role === 'admin' ? 1 : 0, JSON.stringify(e.aliases || []), now);
-      inserted++;
+    const findByName = db.prepare('SELECT id FROM employees WHERE LOWER(name) = LOWER(?)').get;
+
+    let inserted = 0;
+    if ((row?.n ?? 0) === 0) {
+      // fresh DB: insert all defaults
+      for (const e of DEFAULT_EMPLOYEES) {
+        const id = 'emp_' + Math.random().toString(36).slice(2, 10);
+        insert.run(id, e.name, Number(e.default_bill_rate || 0), Number(e.default_pay_rate || 0), e.role === 'admin' ? 1 : 0, JSON.stringify(e.aliases || []), now);
+        inserted++;
+      }
+      try { persist(`seeded ${inserted} default employees`); } catch(e){}
+      return { ok: true, inserted };
     }
+
+    // DB already has employees: ensure any missing defaults (upsert by name)
+    for (const e of DEFAULT_EMPLOYEES) {
+      const exists = findByName(e.name);
+      if (!exists) {
+        const id = 'emp_' + Math.random().toString(36).slice(2, 10);
+        insert.run(id, e.name, Number(e.default_bill_rate || 0), Number(e.default_pay_rate || 0), e.role === 'admin' ? 1 : 0, JSON.stringify(e.aliases || []), now);
+        inserted++;
+      }
+    }
+    if (inserted > 0) try { persist(`inserted ${inserted} missing default employees`); } catch(e){}
     return { ok: true, inserted };
   } catch (err) {
     return { ok: false, error: String(err?.message || err) };

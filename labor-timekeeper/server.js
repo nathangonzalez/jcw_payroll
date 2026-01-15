@@ -21,6 +21,7 @@ import { archiveAndClearPayroll, listArchives, restoreFromCloud, scheduleBackups
 import { loadSecrets } from "./lib/secrets.js";
 import { migrate } from "./lib/migrate.js";
 import { ensureEmployees, getEmployeesDBOrDefault } from "./lib/bootstrap.js";
+import { persist } from './lib/persist.js';
 
 // Load secrets from Google Secret Manager in production
 await loadSecrets();
@@ -56,6 +57,7 @@ const SEED_DIR = path.join(__dirname, 'seed');
 
 // Ensure DB schema is migrated (adds columns and seeds customers if empty)
 await migrate(db);
+try { persist('[startup] migrate completed'); } catch(e){}
 
 // Ensure fallback/default employees are present (DB-first, best-effort)
 try {
@@ -65,6 +67,7 @@ try {
 } catch (err) {
   console.warn('[startup] ensureEmployees threw', err?.message || err);
 }
+try { persist('[startup] ensureEmployees checked'); } catch(e){}
 
 app.use(helmet({ contentSecurityPolicy: false })); // allow inline scripts in MVP
 app.use(morgan("dev"));

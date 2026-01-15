@@ -35,6 +35,7 @@ export async function migrate(db) {
         }
       }
       console.log('[migrate] Applied customer seeds (insert/update) from seed/customers.json');
+      try { const { persist } = await import('./persist.js'); persist('[migrate] applied customer seeds'); } catch(e){}
     }
   } catch (e) {
     console.error('[migrate] Seed check failed:', String(e));
