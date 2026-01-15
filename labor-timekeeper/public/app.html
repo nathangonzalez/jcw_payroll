@@ -87,6 +87,7 @@ let mediaRecorder=null, chunks=[], lastParsed=null;
 // Storage keys
 const EMPLOYEE_KEY = 'labor_timekeeper_employee';
 const DRAFT_KEY = 'labor_timekeeper_draft';
+const LAST_HOURS_KEY = 'labor_timekeeper_last_hours';
 
 function el(id){ return document.getElementById(id); }
 function fmt(n){ return (Math.round(n*100)/100).toString(); }
@@ -150,18 +151,13 @@ async function init(){
   el('employee').innerHTML = '<option value="">-- Select your name --</option>' + 
     EMPLOYEES.map(e => `<option value="${e.id}">${e.name}</option>`).join('');
 
-  // Restore previously selected employee
-  const savedEmpId = localStorage.getItem(EMPLOYEE_KEY);
-  if (savedEmpId) {
-    const emp = EMPLOYEES.find(e => e.id === savedEmpId);
-    // If saved employee was excluded, clear saved selection
-    if (emp) {
-      el('employee').value = savedEmpId;
-      EMPLOYEE = emp;
-    } else {
-      localStorage.removeItem(EMPLOYEE_KEY);
-    }
-  }
+  // Ensure clean launch: do NOT restore any saved form state or employee selection
+  // Remove potential saved keys so the UI always starts blank on load
+  try {
+    localStorage.removeItem(EMPLOYEE_KEY);
+    localStorage.removeItem(DRAFT_KEY);
+    localStorage.removeItem(LAST_HOURS_KEY);
+  } catch(e) {}
 
   // Employee change handler
   el('employee').onchange = async () => {
@@ -231,6 +227,12 @@ async function init(){
       el(id).addEventListener('change', () => saveEntryDebounced());
     }
   });
+  // Persist last-entered hours so testers don't need to retype when switching customers
+  if (el('hours')) {
+    el('hours').addEventListener('input', () => {
+      try { localStorage.setItem(LAST_HOURS_KEY, el('hours').value); } catch(e){}
+    });
+  }
 
   await setupRecorder();
 }
@@ -358,6 +360,33 @@ function updateCustomerAddress() {
   } else {
     el('customerAddress').textContent = '';
   }
+  // Restore last-entered hours into the hours field if it's empty
+  try{
+    const last = localStorage.getItem(LAST_HOURS_KEY);
+    if (last && el('hours') && (!el('hours').value || el('hours').value.trim()==='')) {
+      el('hours').value = last;
+    }
+  }catch(e){}
+
+  // If user has entered hours and a day is selected, auto-save this selection as an entry
+  try {
+    const hoursVal = el('hours') && el('hours').value && el('hours').value.trim() !== '' ? parseFloat(el('hours').value) : null;
+    const workDate = el('day') && el('day').value;
+    const hasCustomer = (selectedOption && selectedOption.value) || ((el('customerName') && el('customerName').value) || '').trim();
+    if (EMPLOYEE && isFinite(hoursVal) && workDate && hasCustomer) {
+      // fire-and-forget save to instantly add entry for testers
+      setTimeout(() => { saveEntry().catch(()=>{}); }, 0);
+    }
+  } catch(e) {}
+}
+
+function restoreLastHoursIfEmpty(){
+  try{
+    const last = localStorage.getItem(LAST_HOURS_KEY);
+    if (last && el('hours') && (!el('hours').value || el('hours').value.trim()==='')) {
+      el('hours').value = last;
+    }
+  }catch(e){}
 }
 
 async function saveEntry(){
@@ -399,7 +428,8 @@ async function saveEntry(){
     body: JSON.stringify({ employee_id: EMPLOYEE.id, customer_id, work_date, hours })
   });
   el('customerName').value = '';
-  el('hours').value = '';
+  // Keep the hours value so testers don't need to retype when switching customers
+  try { localStorage.setItem(LAST_HOURS_KEY, (el('hours') && el('hours').value) || ''); } catch(e){}
   el('customerConfirm').textContent = '';
   clearDraft();
   await refresh();

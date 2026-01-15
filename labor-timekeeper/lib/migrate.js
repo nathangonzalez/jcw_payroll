@@ -14,7 +14,8 @@ export async function migrate(db) {
     const row = db.prepare('SELECT COUNT(*) as n FROM customers').get();
     const count = row?.n ?? 0;
     const seedPath = path.resolve(process.cwd(), 'seed', 'customers.json');
-    if (fs.existsSync(seedPath)) {
+    // Only seed customers if the table is empty
+    if (fs.existsSync(seedPath) && count === 0) {
       const data = JSON.parse(fs.readFileSync(seedPath, 'utf8'));
       const now = new Date().toISOString();
       const insert = db.prepare('INSERT INTO customers (id, name, address, created_at) VALUES (?, ?, ?, ?)');
