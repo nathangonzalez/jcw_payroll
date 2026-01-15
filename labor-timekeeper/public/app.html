@@ -54,10 +54,7 @@
         <div class="col"><button class="primary" id="saveBtn">Save / Update</button></div>
         <div class="col"><button id="submitBtn">Submit Week</button></div>
       </div>
-      <div class="row" style="margin-top:8px; gap:8px; align-items:center;">
-        <label style="display:flex; gap:6px; align-items:center; font-size:13px;"><input type="checkbox" id="seedToggle" /> Allow seeding</label>
-        <button id="seedBtn" style="display:none;">Seed Week</button>
-      </div>
+      <!-- seed UI removed from employee view (admin-only in /admin) -->
       <div class="small muted" style="margin-top:6px;">Saving will update an existing entry for the same day and client (if present).</div>
 
       <hr/>
@@ -207,8 +204,8 @@ async function init(){
   el('customerSelect').addEventListener('change', updateCustomerAddress);
 
   // Customer input handlers
-  el('customerName').addEventListener('input', (e)=>{ renderCustomerConfirm(e.target.value); saveDraftDebounced(); });
-  el('customerName').addEventListener('change', (e)=>{ renderCustomerConfirm(e.target.value); saveDraftDebounced(); });
+  el('customerName').addEventListener('input', (e)=>{ renderCustomerConfirm(e.target.value); saveEntryDebounced(); });
+  el('customerName').addEventListener('change', (e)=>{ renderCustomerConfirm(e.target.value); saveEntryDebounced(); });
 
   // If employee already selected, load week
   if (EMPLOYEE) {
@@ -222,19 +219,6 @@ async function init(){
 
   el('saveBtn').onclick = saveEntry;
   el('submitBtn').onclick = submitWeek;
-  const seedBtn = el('seedBtn'); if (seedBtn) seedBtn.onclick = seedEmployeeWeek;
-
-  // Seed toggle: keep seed button hidden unless explicitly enabled
-  const seedToggle = el('seedToggle');
-  if (seedToggle) {
-    try { seedToggle.checked = false; } catch(e){}
-    const toggleSeedBtn = () => {
-      const btn = el('seedBtn'); if (!btn) return;
-      btn.style.display = seedToggle.checked ? 'inline-block' : 'none';
-    };
-    seedToggle.onchange = toggleSeedBtn;
-    toggleSeedBtn();
-  }
 
   // Default to clean forms on load (don't auto-restore drafts)
   // If you want draft restore later, call `restoreDraft()` manually from the console
@@ -243,30 +227,15 @@ async function init(){
 
   ['customerName', 'day', 'hours'].forEach(id => {
     if (el(id)) {
-      el(id).addEventListener('input', saveDraft);
-      el(id).addEventListener('change', saveDraft);
+      el(id).addEventListener('input', () => saveEntryDebounced());
+      el(id).addEventListener('change', () => saveEntryDebounced());
     }
   });
 
   await setupRecorder();
 }
 
-async function seedEmployeeWeek(){
-  if (!EMPLOYEE) { alert('Select your name first'); return; }
-  const allow = el('seedToggle') && el('seedToggle').checked;
-  if (!allow) { alert('Check "Allow seeding" to enable this action'); return; }
-  if (!confirm('Seed sample hours for your current week as DRAFT?')) return;
-  try {
-    const res = await api('/api/admin/simulate-employee', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ employee_id: EMPLOYEE.id, week_start: WEEK.week_start, reset: false, submit: false })
-    });
-    alert(`Seeded: ${res.created || 0} entries (skipped ${res.skipped || 0})`);
-    await loadWeek();
-  } catch (err) {
-    alert('Seed failed: ' + err.message);
-  }
-}
+// employee-side seeding removed; admin can seed from /admin
 
 async function loadWeek(){
   if (!EMPLOYEE) return;
@@ -356,6 +325,26 @@ function saveDraftDebounced(timeout=400) {
   _draftTimer = setTimeout(()=>{ saveDraft(); _draftTimer = null; }, timeout);
 }
 
+// Debounced auto-save to server when inputs are complete
+let _entryTimer = null;
+function saveEntryDebounced(timeout=800) {
+  if (_entryTimer) clearTimeout(_entryTimer);
+  const selectedOption = el('customerSelect')?.options[el('customerSelect')?.selectedIndex];
+  const customer_id = selectedOption && selectedOption.value ? selectedOption.value : null;
+  const customerName = (el('customerName') && el('customerName').value || '').trim();
+  const work_date = el('day')?.value;
+  const hours = parseFloat(el('hours')?.value);
+  // If not enough data to create an entry, just save a draft locally
+  if ((!customer_id && !customerName) || !work_date || !isFinite(hours)) {
+    saveDraftDebounced();
+    return;
+  }
+  _entryTimer = setTimeout(async ()=>{
+    try { await saveEntry(); } catch(err){ console.warn('Auto-save failed', err); }
+    _entryTimer = null;
+  }, timeout);
+}
+
 function updateCustomerAddress() {
   const select = el('customerSelect');
   const selectedOption = select.options[select.selectedIndex];
@@ -414,16 +403,7 @@ async function saveEntry(){
   el('customerConfirm').textContent = '';
   clearDraft();
   await refresh();
-  // If the employee enabled seeding, automatically seed the rest of the week
-  try {
-    const allowSeed = el('seedToggle') && el('seedToggle').checked;
-    if (allowSeed) {
-      // run seeding but do not block the UI; show a notification after
-      seedEmployeeWeek();
-    }
-  } catch (err) {
-    console.warn('Auto-seed failed', err);
-  }
+  // employee-side auto-seed removed
 }
 
 async function submitWeek(){
