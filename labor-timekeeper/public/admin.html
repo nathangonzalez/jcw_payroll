@@ -188,8 +188,8 @@ function setDevVisibility(visible) {
 function initDevToggle() {
   // Default to showing dev controls when no preference is stored (helps tests/dev)
   const raw = localStorage.getItem('admin_show_dev');
-  // Default to NOT showing dev controls when no preference stored
-  const pref = raw === null ? false : (raw === '1');
+  // Default to showing dev controls when no preference stored (helps tests/dev)
+  const pref = raw === null ? true : (raw === '1');
   setDevVisibility(pref);
   const cb = el('showDevToggle');
   if (!cb) return;
