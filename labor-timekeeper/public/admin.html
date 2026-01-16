@@ -20,9 +20,14 @@
 
   <!-- Admin Content (hidden until PIN verified) -->
   <div id="adminContent" class="container" style="display:none;">
-    <div class="row" style="align-items:center; justify-content:space-between;">
+    <div class="row" style="align-items:center; justify-content:space-between; gap:12px;">
       <h1>Admin</h1>
-      <a href="/app" class="badge">Employee view</a>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <label style="font-size:13px; display:flex; gap:6px; align-items:center;">
+          <input type="checkbox" id="showDevToggle" /> Show Dev Controls
+        </label>
+        <a href="/app" class="badge">Employee view</a>
+      </div>
     </div>
 
     <div class="card" style="margin-top:12px;">
@@ -30,7 +35,7 @@
       <div class="row">
         <div class="col">
           <label class="small muted">Week start (YYYY-MM-DD)</label>
-          <input id="weekStart" placeholder="YYYY-MM-DD" />
+          <select id="weekStart"></select>
         </div>
         <div class="col">
           <label class="small muted">&nbsp;</label>
@@ -50,16 +55,19 @@
       <div class="row">
         <div class="col">
           <label class="small muted">Week Start</label>
-          <input id="pipelineWeek" placeholder="YYYY-MM-DD" />
+          <select id="pipelineWeek"></select>
         </div>
         <div class="col">
           <label class="small muted">Month</label>
           <input id="pipelineMonth" placeholder="YYYY-MM" />
         </div>
       </div>
-      <div class="row" style="margin-top:12px; gap:8px;">
-        <button id="genWeekBtn" class="primary">⬇️ Weekly Report (per Employee)</button>
-        <button id="genMonthBtn" class="primary">⬇️ Monthly Breakdown</button>
+      <div id="devControls">
+          <div class="row" style="margin-top:12px; gap:8px;">
+            <button id="genWeekBtn" class="primary">⬇️ Weekly Report (per Employee)</button>
+            <button id="genMonthBtn" class="primary">⬇️ Monthly Breakdown</button>
+            <button id="seedWeeksBtn" class="primary">🌱 Simulate Month</button>
+          </div>
       </div>
       <div id="pipelineResult" style="margin-top:12px; padding:10px; background:#f8f9fa; border-radius:4px; display:none;">
         <pre id="pipelineOutput" style="margin:0; white-space:pre-wrap; font-size:12px;"></pre>
@@ -145,6 +153,7 @@ async function init(){
   // Report download buttons
   el('genWeekBtn').onclick = downloadWeekly;
   el('genMonthBtn').onclick = downloadMonthly;
+  const seedBtn = el('seedWeeksBtn'); if (seedBtn) seedBtn.onclick = seedSampleWeeks;
   el('previewReconcileBtn').onclick = previewReconcile;
   el('closeMonthBtn').onclick = closeMonth;
 
@@ -153,13 +162,160 @@ async function init(){
   const ym = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
   el('pipelineMonth').value = ym;
   el('closeMonth').value = ym;
+  // populate week dropdowns from available exports (falls back to current week)
+  await populateWeekSelects();
 
   // default week start: ask server by loading approvals once without week
   const data = await api('/api/approvals?_=' + Date.now());
-  el('weekStart').value = data.week_start;
-  el('pipelineWeek').value = data.week_start;
+  // set defaults on the selects to the server-provided week_start
+  setSelectValue('weekStart', data.week_start);
+  setSelectValue('pipelineWeek', data.week_start);
   submittedCache = data.submitted;
   renderSubmitted(data.submitted);
+}
+
+// Note: Clear test entries button removed — use admin endpoints carefully via API.
+
+// Dev controls toggle
+function setDevVisibility(visible) {
+  const dev = el('devControls');
+  if (!dev) return;
+  dev.style.display = visible ? 'block' : 'none';
+  try { localStorage.setItem('admin_show_dev', visible ? '1' : '0'); } catch(e){}
+  const cb = el('showDevToggle'); if (cb) cb.checked = !!visible;
+}
+
+function initDevToggle() {
+  // Default to showing dev controls when no preference is stored (helps tests/dev)
+  const raw = localStorage.getItem('admin_show_dev');
+  // Default to NOT showing dev controls when no preference stored
+  const pref = raw === null ? false : (raw === '1');
+  setDevVisibility(pref);
+  const cb = el('showDevToggle');
+  if (!cb) return;
+  cb.onchange = () => setDevVisibility(cb.checked);
+}
+
+// Initialize dev toggle state on load
+initDevToggle();
+
+function setSelectValue(id, value) {
+  const s = el(id);
+  if (!s) return;
+  // if option exists select it, otherwise add an option and select
+  const opt = Array.from(s.options).find(o => o.value === value);
+  if (opt) {
+    s.value = value;
+  } else if (value) {
+    const newOpt = document.createElement('option');
+    newOpt.value = value;
+    newOpt.textContent = value + ' (default)';
+    s.prepend(newOpt);
+    s.value = value;
+  }
+}
+
+async function populateWeekSelects(){
+  try {
+    const resp = await api('/api/exports?_=' + Date.now());
+    const exports = resp.exports || [];
+    const weekOptions = [];
+    for (const m of exports) {
+      for (const w of m.weeks) {
+        weekOptions.push({ month: m.month, week: w });
+      }
+    }
+
+    // If no exports found, include current week start
+    if (weekOptions.length === 0) {
+      const today = new Date();
+      const y = today.getFullYear();
+      const m = String(today.getMonth() + 1).padStart(2, '0');
+      const d = String(today.getDate()).padStart(2, '0');
+      const defaultWeek = `${y}-${m}-${d}`;
+      weekOptions.push({ month: `${y}-${m}`, week: defaultWeek });
+    }
+
+    const weeksSorted = weekOptions.sort((a,b) => (a.week < b.week ? 1 : -1));
+
+    const wkSel = el('weekStart');
+    const pipelineSel = el('pipelineWeek');
+    if (!wkSel || !pipelineSel) return;
+
+    // clear existing
+    wkSel.innerHTML = '';
+    pipelineSel.innerHTML = '';
+
+    // Group by month for nicer labels
+    const grouped = {};
+    for (const w of weeksSorted) {
+      grouped[w.month] = grouped[w.month] || [];
+      grouped[w.month].push(w.week);
+    }
+
+    for (const month of Object.keys(grouped)) {
+      const optGroupLabel = month;
+      for (const wk of grouped[month]) {
+        const o1 = document.createElement('option');
+        o1.value = wk;
+        o1.textContent = `${wk} (${optGroupLabel})`;
+        wkSel.appendChild(o1);
+
+        const o2 = document.createElement('option');
+        o2.value = wk;
+        o2.textContent = `${wk} (${optGroupLabel})`;
+        pipelineSel.appendChild(o2);
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to populate week selects', err);
+  }
+}
+
+async function simulateWeek(){
+  const week_start = el('pipelineWeek').value.trim();
+  if (!week_start) { alert('Enter week start date'); return; }
+  const reset = !!el('simReset').checked;
+  const submit = !!el('simSubmit').checked;
+  const approve = !!el('simApprove').checked;
+
+  if (!confirm(`Simulate week ${week_start}?\nReset: ${reset}\nSubmit: ${submit}\nApprove: ${approve}`)) return;
+
+  try {
+    showPipelineResult('Simulating week...');
+    const result = await api('/api/admin/simulate-week', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ week_start, reset, submit, approve })
+    });
+    const output = [
+      `🧪 Simulate Week: ${result.week_start}`,
+      `Created: ${result.created}`,
+      `Skipped: ${result.skipped}`,
+      `Deleted: ${result.deleted}`,
+      `Options: reset=${result.options.reset}, submit=${result.options.submit}, approve=${result.options.approve}`
+    ].join('\n');
+    showPipelineResult(output);
+  } catch (err) {
+    showPipelineResult(`❌ Error: ${err.message}`);
+  }
+}
+
+async function seedSampleWeeks(){
+  const month = (el('pipelineMonth').value || '').trim();
+  if (!month) { alert('Enter month (YYYY-MM) to seed'); return; }
+  // Default to submitted+approved so seeded data is ready for exports/tests
+  const submit = true;
+  const approve = true;
+  if (!confirm(`Seed entries for month ${month}?\nThis will create weekly entries for the entire month as SUBMITTED+APPROVED for admin review.`)) return;
+  try {
+    showPipelineResult(`Seeding month entries (SUBMITTED+APPROVED)...`);
+    const result = await api('/api/admin/simulate-month', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ month, reset: true, submit, approve }) });
+    const output = `✅ Seeded month ${month}:\n${JSON.stringify(result, null, 2)}`;
+    showPipelineResult(output);
+  } catch (err) {
+    showPipelineResult(`❌ Error: ${err.message}`);
+  }
 }
 
 // Report download functions
@@ -171,6 +327,7 @@ async function downloadWeekly() {
     const result = await api(`/api/admin/generate-week?week_start=${encodeURIComponent(week_start)}`);
     
     if (result.files && result.files.length > 0) {
+      const totals = result.totals || {};
       const output = [
         `✅ Weekly Export Complete`,
         `Week: ${result.weekStart}`,
@@ -178,7 +335,9 @@ async function downloadWeekly() {
         `Files Generated (${result.files.length}):`,
         ...result.files.map(f => `  • ${f.filename}: ${f.hours}hrs ($${f.amount})`),
         ``,
-        `Total: ${result.totals.totalHours} hours, $${result.totals.totalAmount}`,
+        `Totals: ${totals.totalHours} hours — $${totals.totalAmount}`,
+        `  • Hourly: $${totals.hourlyAmount || 0}`,
+        `  • Admin: $${totals.adminAmount || 0}`,
         ``,
         `Files saved to: ${result.outputDir}`,
       ].join('\n');
@@ -194,7 +353,7 @@ async function downloadWeekly() {
 async function downloadMonthly() {
   const month = el('pipelineMonth').value.trim();
   if (!month) { alert('Enter month (YYYY-MM)'); return; }
-  // Directly download the file
+  // Directly download the file; do not auto-seed. Use the Simulate button to populate data.
   window.location.href = `/api/export/monthly?month=${encodeURIComponent(month)}`;
 }
 
@@ -259,8 +418,10 @@ function showPipelineResult(text) {
 }
 
 async function loadSubmitted(){
-  const week_start = el('weekStart').value.trim();
-  const data = await api('/api/approvals?week_start=' + encodeURIComponent(week_start) + '&_=' + Date.now());
+  // Try selected week, fall back to pipelineWeek, otherwise load current week
+  const week_start = (el('weekStart').value || el('pipelineWeek').value || '').trim();
+  const qs = week_start ? ('?week_start=' + encodeURIComponent(week_start) + '&_=' + Date.now()) : ('?_=' + Date.now());
+  const data = await api('/api/approvals' + qs);
   submittedCache = data.submitted;
   renderSubmitted(data.submitted);
 }

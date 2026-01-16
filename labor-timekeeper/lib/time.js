@@ -9,7 +9,7 @@ export function todayYMD() {
 }
 
 export function weekStartYMD(date = new Date()) {
-  const weekStartsOn = Number(process.env.PAYROLL_WEEK_START ?? 1); // Monday default
+  const weekStartsOn = Number(process.env.PAYROLL_WEEK_START ?? 3); // Wednesday default
   // Use zoned time for consistent payroll weeks
   const zoned = toZonedTime(date, TZ);
   const start = startOfWeek(zoned, { weekStartsOn });

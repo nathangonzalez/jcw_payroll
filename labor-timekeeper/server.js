@@ -5,6 +5,7 @@ import morgan from "morgan";
 import multer from "multer";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from 'url';
 import { openDb, id } from "./lib/db.js";
 import { weekStartYMD, weekDates, todayYMD } from "./lib/time.js";
 import { transcribeAudio, parseVoiceCommand } from "./lib/voice.js";
@@ -13,41 +14,214 @@ import { buildMonthlyWorkbook } from "./lib/export_excel.js";
 import { generateWeeklyExports } from "./lib/export/generateWeekly.js";
 import { generateMonthlyExport } from "./lib/export/generateMonthly.js";
 import { getHolidaysForYear, getHolidaysInRange } from "./lib/holidays.js";
-import { sendMonthlyReport } from "./lib/email.js";
-import { archiveAndClearPayroll, listArchives } from "./lib/storage.js";
+import { sendMonthlyReport, sendEmail } from "./lib/email.js";
+import { archiveAndClearPayroll, listArchives, restoreFromCloud, scheduleBackups, backupToCloud } from "./lib/storage.js";
 import { loadSecrets } from "./lib/secrets.js";
 import { migrate } from "./lib/migrate.js";
+import { ensureEmployees, getEmployeesDBOrDefault } from "./lib/bootstrap.js";
 
 // Load secrets from Google Secret Manager in production
 await loadSecrets();
 
 const app = express();
+
+// Ensure persistent DB is restored from Cloud Storage in production
+const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, 'data', 'app.db');
+if (process.env.NODE_ENV === 'production') {
+  try {
+    await restoreFromCloud(DB_PATH);
+  } catch (err) {
+    console.warn('[startup] restoreFromCloud failed', err?.message || err);
+  }
+}
+
 const db = openDb();
+
+// Schedule backups to Cloud Storage so data persists beyond ephemeral instances
+if (process.env.NODE_ENV === 'production') {
+  try {
+    scheduleBackups(DB_PATH);
+  } catch (err) {
+    console.warn('[startup] scheduleBackups failed', err?.message || err);
+  }
+}
+
+// Resolve directories relative to this module so the server works
+// even when started from a different current working directory.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const EXPORT_DIR = path.join(__dirname, 'exports');
+const SEED_DIR = path.join(__dirname, 'seed');
 
 // Ensure DB schema is migrated (adds columns and seeds customers if empty)
 await migrate(db);
 
+// Ensure fallback/default employees are present (DB-first, best-effort)
+try {
+  const res = ensureEmployees(db);
+  if (res && res.ok && res.inserted) console.log('[startup] inserted default employees:', res.inserted);
+  if (res && !res.ok) console.warn('[startup] ensureEmployees failed:', res.error);
+} catch (err) {
+  console.warn('[startup] ensureEmployees threw', err?.message || err);
+}
+
 app.use(helmet({ contentSecurityPolicy: false })); // allow inline scripts in MVP
 app.use(morgan("dev"));
 app.use(express.json({ limit: "2mb" }));
-app.use(express.static("public"));
+app.use(express.static(PUBLIC_DIR));
+// Serve generated exports for download links
+app.use('/exports', express.static(EXPORT_DIR));
 
 // Use /tmp for uploads in production (App Engine read-only filesystem)
 const uploadDir = process.env.NODE_ENV === 'production' ? '/tmp/uploads' : './data/uploads';
 const upload = multer({ dest: uploadDir });
 
 /** Health */
-app.get("/api/health", (req, res) => res.json({ ok: true, today: todayYMD() }));
+app.get("/api/health", (req, res) => {
+  try {
+    const stats = {
+      customers: db.prepare('SELECT COUNT(*) AS n FROM customers').get().n || 0,
+      employees: db.prepare('SELECT COUNT(*) AS n FROM employees').get().n || 0,
+      time_entries: db.prepare('SELECT COUNT(*) AS n FROM time_entries').get().n || 0
+    };
+    return res.json({ ok: true, today: todayYMD(), db: DB_PATH, stats });
+  } catch (err) {
+    return res.json({ ok: true, today: todayYMD(), db: DB_PATH, stats: null, error: String(err?.message || err) });
+  }
+});
 
 /** Reference data - no auth required */
 app.get("/api/customers", (req, res) => {
-  const rows = db.prepare("SELECT id, name, address FROM customers ORDER BY name ASC").all();
+  // Exclude obvious test or placeholder customers from the public API
+  const rows = db.prepare(
+    `SELECT id, name, address FROM customers
+     WHERE lower(name) NOT LIKE 'test%'
+       AND lower(name) NOT LIKE '%api test%'
+       AND lower(name) NOT LIKE '%placeholder%'
+       AND lower(name) NOT LIKE '%api%'
+       AND lower(name) NOT LIKE '%test%'
+     ORDER BY name ASC`
+  ).all();
   res.json(rows);
 });
 
+/** Admin: Clear time entries that reference API/test placeholder customers
+ * POST /api/admin/clear-test-entries
+ */
+app.post('/api/admin/clear-test-entries', (req, res) => {
+  try {
+    const adminSecret = process.env.ADMIN_SECRET;
+    const provided = req.headers['x-admin-secret'] || req.body?.admin_secret;
+    if (adminSecret && provided !== adminSecret) {
+      return res.status(403).json({ error: 'admin secret required' });
+    }
+
+    // Find customer ids with suspicious names
+    const rows = db.prepare(`SELECT id, name FROM customers WHERE lower(name) LIKE '%api%' OR lower(name) LIKE '%test%' OR lower(name) LIKE '%placeholder%'`).all();
+    if (!rows || rows.length === 0) return res.json({ ok: true, deleted: 0, customers: [] });
+    const ids = rows.map(r => r.id);
+    const del = db.prepare(`DELETE FROM time_entries WHERE customer_id IN (${ids.map(()=>'?').join(',')})`);
+    const result = del.run(...ids);
+    res.json({ ok: true, deleted: result.changes || 0, customers: rows.map(r => r.name) });
+  } catch (err) {
+    console.error('[admin/clear-test-entries]', err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+// Diagnostic: list time entries referencing API/Test/Placeholder customers
+app.get('/api/admin/list-test-entries', (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT te.id, te.work_date, te.hours, te.status, c.name as customer_name, e.name as employee_name
+      FROM time_entries te
+      JOIN customers c ON c.id = te.customer_id
+      JOIN employees e ON e.id = te.employee_id
+      WHERE lower(c.name) LIKE '%api%' OR lower(c.name) LIKE '%test%' OR lower(c.name) LIKE '%placeholder%'
+      ORDER BY te.work_date ASC
+    `).all();
+    res.json({ ok: true, count: rows.length, rows });
+  } catch (err) {
+    console.error('[admin/list-test-entries]', err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+// Admin: clear entries that were seeded by the simulate functions (notes contain 'Seeded sample hours')
+app.post('/api/admin/clear-seeded-entries', (req, res) => {
+  try {
+    const adminSecret = process.env.ADMIN_SECRET;
+    const provided = req.headers['x-admin-secret'] || req.body?.admin_secret;
+    if (adminSecret && provided !== adminSecret) {
+      return res.status(403).json({ error: 'admin secret required' });
+    }
+    const del = db.prepare(`DELETE FROM time_entries WHERE notes LIKE ?`);
+    const r = del.run('%Seeded sample hours%');
+    res.json({ ok: true, deleted: r.changes || 0 });
+  } catch (err) {
+    console.error('[admin/clear-seeded-entries]', err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+/** Admin: clear seeded entries for a specific employee
+ * POST /api/admin/clear-employee-seeded { employee_id: 'emp_xxx', since?: 'ISO date' }
+ */
+app.post('/api/admin/clear-employee-seeded', (req, res) => {
+  try {
+    const adminSecret = process.env.ADMIN_SECRET;
+    const provided = req.headers['x-admin-secret'] || req.body?.admin_secret;
+    if (adminSecret && provided !== adminSecret) {
+      return res.status(403).json({ error: 'admin secret required' });
+    }
+    const { employee_id, since } = req.body || {};
+    if (!employee_id) return res.status(400).json({ error: 'employee_id required' });
+    const sinceIso = since ? new Date(since).toISOString() : null;
+    let r;
+    if (sinceIso) {
+      const del = db.prepare(`DELETE FROM time_entries WHERE employee_id = ? AND created_at >= ?`);
+      r = del.run(employee_id, sinceIso);
+    } else {
+      const del = db.prepare(`DELETE FROM time_entries WHERE employee_id = ?`);
+      r = del.run(employee_id);
+    }
+    res.json({ ok: true, deleted: r.changes || 0 });
+  } catch (err) {
+    console.error('[admin/clear-employee-seeded]', err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+// Admin: list recent time entries (helpful to find seeded entries)
+app.get('/api/admin/list-recent-entries', (req, res) => {
+  try {
+    const days = Number(req.query.days || 7);
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    const sinceIso = since.toISOString();
+    const rows = db.prepare(`
+      SELECT te.id, te.work_date, te.hours, te.status, te.notes, te.created_at, e.name as employee_name, c.name as customer_name
+      FROM time_entries te
+      JOIN employees e ON e.id = te.employee_id
+      JOIN customers c ON c.id = te.customer_id
+      WHERE te.created_at >= ?
+      ORDER BY te.created_at DESC
+    `).all(sinceIso);
+    res.json({ ok: true, count: rows.length, rows });
+  } catch (err) {
+    console.error('[admin/list-recent-entries]', err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
 app.get("/api/employees", (req, res) => {
-  const rows = db.prepare("SELECT id, name, default_bill_rate, is_admin FROM employees ORDER BY name ASC").all();
-  res.json(rows);
+  try {
+    const rows = getEmployeesDBOrDefault(db);
+    const out = rows.map(r => ({ id: r.id, name: r.name, default_bill_rate: r.default_bill_rate || 0, is_admin: r.role === 'admin' }));
+    return res.json(out);
+  } catch (err) {
+    return res.json([]);
+  }
 });
 
 /** Time entries - employee_id passed in query/body */
@@ -103,7 +277,52 @@ app.post("/api/time-entries", (req, res) => {
     `).run(Number(hours), String(notes || ""), now, existing.id);
   }
 
+  // Notify admin via email about new/updated time entry (best-effort)
+  (async () => {
+    try {
+      const emp = db.prepare('SELECT id, name FROM employees WHERE id = ?').get(employee_id);
+      const cust = db.prepare('SELECT id, name FROM customers WHERE id = ?').get(customer_id);
+      const subject = `Time entry ${existing ? 'updated' : 'created'}: ${emp?.name || employee_id}`;
+      const text = `A time entry was ${existing ? 'updated' : 'created'}.
+
+Employee: ${emp?.name || employee_id}
+Customer: ${cust?.name || customer_id}
+Date: ${work_date}
+Hours: ${hours}
+Notes: ${notes || ''}
+
+View admin approvals: ${process.env.BASE_URL || 'http://localhost:3000'}/admin
+`;
+      const to = process.env.EMAIL_TO || 'nathan@jcwelton.com';
+      await sendEmail({ to, subject, text });
+    } catch (err) {
+      console.warn('[email] Failed to send time-entry notification', err?.message || err);
+    }
+  })();
+
   res.json({ ok: true });
+});
+
+/** Allow employee to delete their own DRAFT time entry
+ * DELETE /api/time-entries/:id  { employee_id }
+ */
+app.delete('/api/time-entries/:id', (req, res) => {
+  try {
+    const teId = req.params.id;
+    const employeeId = req.body?.employee_id || req.query.employee_id;
+    if (!employeeId) return res.status(400).json({ error: 'employee_id required' });
+
+    const entry = db.prepare('SELECT id, employee_id, status FROM time_entries WHERE id = ?').get(teId);
+    if (!entry) return res.status(404).json({ error: 'time entry not found' });
+    if (entry.employee_id !== employeeId) return res.status(403).json({ error: 'not authorized to delete this entry' });
+    if (entry.status && entry.status !== 'DRAFT') return res.status(409).json({ error: 'only DRAFT entries can be deleted' });
+
+    const r = db.prepare('DELETE FROM time_entries WHERE id = ?').run(teId);
+    res.json({ ok: true, deleted: r.changes || 0 });
+  } catch (err) {
+    console.error('[time-entries/delete]', err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
 });
 
 app.post("/api/submit-week", (req, res) => {
@@ -120,7 +339,7 @@ app.post("/api/submit-week", (req, res) => {
     SET status = 'SUBMITTED', updated_at = ?
     WHERE employee_id = ?
       AND work_date >= ? AND work_date <= ?
-      AND status = 'DRAFT'
+      AND (status = 'DRAFT' OR status IS NULL)
   `).run(new Date().toISOString(), employee_id, start, end);
 
   res.json({ ok: true, week_start: ws });
@@ -219,6 +438,23 @@ app.get("/api/admin/generate-week", async (req, res) => {
     }
 
     const result = await generateWeeklyExports({ db, weekStart });
+
+    // Fire-and-forget: email admin with links and attachments for the generated files
+    (async () => {
+      try {
+        const to = process.env.EMAIL_TO || 'nathan@jcwelton.com';
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const links = result.files.map(f => `${baseUrl}/exports/${weekStart.slice(0,7)}/${weekStart}/${encodeURIComponent(f.filename)}`);
+        const subject = `Weekly Exports: ${weekStart}`;
+        const text = `Weekly exports for ${weekStart} are ready.\n\nFiles:\n${links.join('\n')}\n\nFiles are also attached to this email.`;
+        const attachments = result.files.map(f => ({ filename: f.filename, path: f.filepath }));
+        await sendEmail({ to, subject, text, attachments });
+        console.log('[email] Weekly export notification sent to', to);
+      } catch (err) {
+        console.warn('[email] Failed to send weekly export notification', err?.message || err);
+      }
+    })();
+
     res.json({
       ok: true,
       weekStart,
@@ -425,12 +661,12 @@ app.post("/api/import/month", async (req, res) => {
 // List available exports
 app.get("/api/exports", (req, res) => {
   try {
-    const exportDir = path.resolve("exports");
+    const exportDir = EXPORT_DIR; // path.resolve("exports")
     if (!fs.existsSync(exportDir)) {
-      return res.json({ ok: true, months: [] });
-    }
+        return res.json({ ok: true, months: [] });
+      }
     
-    const months = fs.readdirSync(exportDir)
+      const months = fs.readdirSync(exportDir)
       .filter(d => /^\d{4}-\d{2}$/.test(d))
       .sort()
       .reverse();
@@ -459,7 +695,10 @@ app.get("/api/exports", (req, res) => {
 /** Admin: Seed database (for production deployment) */
 app.post("/api/admin/seed", async (req, res) => {
   try {
-    const seedPath = path.resolve("seed");
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(403).json({ error: 'seeding disabled in production' });
+    }
+    const seedPath = SEED_DIR; // path.resolve("seed")
     const customers = JSON.parse(fs.readFileSync(path.join(seedPath, "customers.json"), "utf-8"));
     const employees = JSON.parse(fs.readFileSync(path.join(seedPath, "employees.json"), "utf-8"));
     const overrides = JSON.parse(fs.readFileSync(path.join(seedPath, "rate_overrides.json"), "utf-8"));
@@ -528,6 +767,15 @@ app.post("/api/admin/seed", async (req, res) => {
       rateCount++;
     }
     
+    // If running in production, back up DB immediately so seeded data is persisted
+    if (process.env.NODE_ENV === 'production') {
+      try {
+        await backupToCloud(DB_PATH);
+      } catch (err) {
+        console.warn('[admin/seed] backupToCloud failed', err?.message || err);
+      }
+    }
+
     res.json({ 
       ok: true, 
       seeded: { customers: custCount, employees: empCount, overrides: rateCount },
@@ -539,6 +787,198 @@ app.post("/api/admin/seed", async (req, res) => {
     });
   } catch (err) {
     console.error("[admin/seed]", err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+/** Admin: Simulate a week with sample entries (optional reset/submit/approve)
+ * POST /api/admin/simulate-week { week_start: 'YYYY-MM-DD', reset?: bool, submit?: bool, approve?: bool }
+ * If ADMIN_SECRET env var is set, client must send header 'x-admin-secret' or body.admin_secret matching it.
+ */
+app.post('/api/admin/simulate-week', (req, res) => {
+  try {
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(403).json({ error: 'seeding disabled in production' });
+    }
+    const adminSecret = process.env.ADMIN_SECRET;
+    const provided = req.headers['x-admin-secret'] || req.body?.admin_secret;
+    if (adminSecret && provided !== adminSecret) {
+      return res.status(403).json({ error: 'admin secret required' });
+    }
+
+    const { week_start, reset = false, submit = false, approve = false } = req.body || {};
+    if (!week_start || !/^\d{4}-\d{2}-\d{2}$/.test(week_start)) {
+      return res.status(400).json({ error: 'week_start=YYYY-MM-DD required' });
+    }
+
+    // Sample entries adapted from scripts/simulate.js
+    const SAMPLE_ENTRIES = [
+      { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 0 },
+      { employee: 'Chris Jacobi', customer: 'Hall', hours: 8, dayOffset: 1 },
+      { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 2 },
+      { employee: 'Chris Jacobi', customer: 'Bryan', hours: 10, dayOffset: 3 },
+      { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 4 },
+      { employee: 'Chris Z', customer: 'Hall', hours: 9, dayOffset: 0 },
+      { employee: 'Chris Z', customer: 'Bryan', hours: 8, dayOffset: 1 },
+      { employee: 'Chris Z', customer: 'McGill', hours: 7, dayOffset: 2 },
+      { employee: 'Chris Z', customer: 'Hall', hours: 8, dayOffset: 3 },
+      { employee: 'Chris Z', customer: 'Bryan', hours: 10, dayOffset: 4 },
+      { employee: 'Doug Kinsey', customer: 'McGill', hours: 10, dayOffset: 0 },
+      { employee: 'Doug Kinsey', customer: 'Hall', hours: 10, dayOffset: 1 },
+      { employee: 'Doug Kinsey', customer: 'Bryan', hours: 10, dayOffset: 2 },
+      { employee: 'Doug Kinsey', customer: 'McGill', hours: 10, dayOffset: 3 },
+      { employee: 'Doug Kinsey', customer: 'Hall', hours: 8, dayOffset: 4 },
+      { employee: 'Jafid Osorio', customer: 'Bryan', hours: 8, dayOffset: 0 },
+      { employee: 'Jafid Osorio', customer: 'McGill', hours: 8, dayOffset: 1 },
+      { employee: 'Jafid Osorio', customer: 'Hall', hours: 8, dayOffset: 2 },
+      { employee: 'Jafid Osorio', customer: 'Bryan', hours: 8, dayOffset: 3 },
+      { employee: 'Jafid Osorio', customer: 'McGill', hours: 8, dayOffset: 4 }
+    ];
+
+    // Find employees and customers (include aliases and role for matching)
+    const employees = db.prepare('SELECT id, name, aliases_json, role FROM employees').all();
+    const customers = db.prepare('SELECT id, name FROM customers').all();
+    const empMap = new Map();
+    // map by name and aliases (case-insensitive keys)
+    for (const e of employees) {
+      empMap.set(e.name.toLowerCase(), e);
+      try {
+        const aliases = e.aliases_json ? JSON.parse(e.aliases_json) : [];
+        for (const a of aliases || []) {
+          if (a && typeof a === 'string') empMap.set(a.toLowerCase(), e);
+        }
+      } catch (err) {
+        // ignore parse errors
+      }
+    }
+    // customer map keyed by lowercase name for lenient matching
+    const custMap = new Map();
+    for (const c of customers) custMap.set(c.name.toLowerCase(), c);
+
+    // Optionally delete existing entries for the week
+    const start = week_start;
+    const startDate = new Date(start);
+    const endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + 6);
+    const end = `${endDate.getFullYear()}-${String(endDate.getMonth()+1).padStart(2,'0')}-${String(endDate.getDate()).padStart(2,'0')}`;
+
+    let created = 0, skipped = 0, deleted = 0;
+    const now = new Date().toISOString();
+    const tx = db.transaction(() => {
+      if (reset) {
+        const del = db.prepare(`DELETE FROM time_entries WHERE work_date >= ? AND work_date <= ?`);
+        const r = del.run(start, end);
+        deleted = r.changes || 0;
+      }
+
+      for (const entry of SAMPLE_ENTRIES) {
+        // try exact/alias match (case-insensitive) for employee
+        const empKey = String(entry.employee || '').toLowerCase();
+        let emp = empMap.get(empKey);
+        if (!emp) {
+          // try substring match
+          emp = employees.find(e => e.name.toLowerCase().includes(empKey) || (e.aliases_json || '').toLowerCase().includes(empKey));
+        }
+
+        // try customer match similarly
+        const custKey = String(entry.customer || '').toLowerCase();
+        let cust = custMap.get(custKey);
+        if (!cust) {
+          cust = customers.find(c => c.name.toLowerCase().includes(custKey));
+        }
+
+        if (!emp || !cust) { skipped++; continue; }
+
+        // Skip admin users and Jafid per request
+        const empNameLower = (emp.name || '').toLowerCase();
+        if ((emp.role && emp.role === 'admin') || empNameLower.includes('jafid')) {
+          skipped++; continue;
+        }
+
+        // compute work_date for this entry
+        const [y,m,d] = start.split('-').map(Number);
+        const workDate = new Date(y, m-1, d + entry.dayOffset);
+        const workDateYmd = `${workDate.getFullYear()}-${String(workDate.getMonth()+1).padStart(2,'0')}-${String(workDate.getDate()).padStart(2,'0')}`;
+
+        // avoid duplicate
+        const exists = db.prepare(`SELECT id FROM time_entries WHERE employee_id=? AND customer_id=? AND work_date=?`).get(emp.id, cust.id, workDateYmd);
+        if (exists) { skipped++; continue; }
+
+        const status = approve ? 'APPROVED' : (submit ? 'SUBMITTED' : 'DRAFT');
+        db.prepare(`INSERT INTO time_entries (id, employee_id, customer_id, work_date, hours, notes, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(id('te_'), emp.id, cust.id, workDateYmd, Number(entry.hours), '', status, now, now);
+        created++;
+      }
+    });
+    tx();
+
+    res.json({ ok: true, week_start, created, skipped, deleted, options: { reset, submit, approve } });
+  } catch (err) {
+    console.error('[admin/simulate-week]', err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+/** Admin: Simulate entries for a single employee for a week
+ * POST /api/admin/simulate-employee { employee_id: 'id', week_start: 'YYYY-MM-DD', reset?: bool, submit?: bool }
+ */
+app.post('/api/admin/simulate-employee', (req, res) => {
+  try {
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(403).json({ error: 'seeding disabled in production' });
+    }
+    const adminSecret = process.env.ADMIN_SECRET;
+    const provided = req.headers['x-admin-secret'] || req.body?.admin_secret;
+    if (adminSecret && provided !== adminSecret) {
+      return res.status(403).json({ error: 'admin secret required' });
+    }
+
+    const { employee_id, week_start, reset = false, submit = false } = req.body || {};
+    if (!employee_id) return res.status(400).json({ error: 'employee_id required' });
+    if (!week_start || !/^\d{4}-\d{2}-\d{2}$/.test(week_start)) return res.status(400).json({ error: 'week_start=YYYY-MM-DD required' });
+
+    const emp = db.prepare('SELECT id, name, role FROM employees WHERE id = ?').get(employee_id);
+    if (!emp) return res.status(404).json({ error: 'employee not found' });
+    if (emp.role === 'admin') return res.status(400).json({ error: 'cannot seed admin user' });
+
+    const customers = db.prepare('SELECT id, name FROM customers ORDER BY name ASC').all();
+    if (!customers || customers.length === 0) return res.status(400).json({ error: 'no customers to seed' });
+
+    // Simple pattern: fill Mon-Fri with 8 hours across available customers
+    const DAY_OFFSETS = [0,1,2,3,4];
+    let created = 0, skipped = 0, deleted = 0;
+    const now = new Date().toISOString();
+
+    const start = week_start;
+    const [y,m,d] = start.split('-').map(Number);
+    const tx = db.transaction(() => {
+      if (reset) {
+        const del = db.prepare(`DELETE FROM time_entries WHERE employee_id=? AND work_date >= ? AND work_date <= ?`);
+        const endDate = new Date(y, m-1, d + 6);
+        const end = `${endDate.getFullYear()}-${String(endDate.getMonth()+1).padStart(2,'0')}-${String(endDate.getDate()).padStart(2,'0')}`;
+        const r = del.run(employee_id, start, end);
+        deleted = r.changes || 0;
+      }
+
+      for (let i = 0; i < DAY_OFFSETS.length; i++) {
+        const dayOffset = DAY_OFFSETS[i];
+        const workDate = new Date(y, m-1, d + dayOffset);
+        const workDateYmd = `${workDate.getFullYear()}-${String(workDate.getMonth()+1).padStart(2,'0')}-${String(workDate.getDate()).padStart(2,'0')}`;
+        // pick customer round-robin
+        const cust = customers[i % customers.length];
+        const exists = db.prepare(`SELECT id FROM time_entries WHERE employee_id=? AND customer_id=? AND work_date=?`).get(employee_id, cust.id, workDateYmd);
+        if (exists) { skipped++; continue; }
+        const status = submit ? 'SUBMITTED' : 'DRAFT';
+        db.prepare(`INSERT INTO time_entries (id, employee_id, customer_id, work_date, hours, notes, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(id('te_'), employee_id, cust.id, workDateYmd, 8, 'Seeded sample hours', status, now, now);
+        created++;
+      }
+    });
+    tx();
+
+    res.json({ ok: true, employee: emp.name, week_start, created, skipped, deleted, options: { reset, submit } });
+  } catch (err) {
+    console.error('[admin/simulate-employee]', err);
     res.status(500).json({ error: String(err?.message || err) });
   }
 });
@@ -558,6 +998,218 @@ app.get("/api/admin/stats", (req, res) => {
     res.json({ ok: true, stats });
   } catch (err) {
     console.error("[admin/stats]", err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+// Temporary debug endpoint: list employees (requires admin secret if set)
+app.get('/api/admin/dump-employees', (req, res) => {
+  try {
+    const adminSecret = process.env.ADMIN_SECRET;
+    const provided = req.headers['x-admin-secret'] || req.query?.admin_secret;
+    if (adminSecret && provided !== adminSecret) return res.status(403).json({ error: 'admin secret required' });
+    const rows = db.prepare('SELECT id, name, role, is_admin FROM employees ORDER BY name ASC').all();
+    res.json({ ok: true, count: rows.length, rows });
+  } catch (err) {
+    console.error('[admin/dump-employees]', err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+/** Admin: Seed previous sample weeks for UAT (leaves current week empty)
+ * POST /api/admin/seed-weeks
+ * Response: { ok: true, seeded: { '<week>': { created, skipped, deleted } } }
+ */
+app.post('/api/admin/seed-weeks', (req, res) => {
+  try {
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(403).json({ error: 'seeding disabled in production' });
+    }
+    // Determine week starts: previous 2 weeks; leave current week empty
+    const now = new Date();
+    const getWeekStart = d => weekStartYMD(new Date(d));
+    const currentWeek = getWeekStart(now);
+    const prev1 = getWeekStart(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7));
+    const prev2 = getWeekStart(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 14));
+    const weeks = [prev2, prev1];
+
+    const results = {};
+    for (const wk of weeks) {
+      // Reuse simulate-week logic by performing inserts similar to the endpoint
+      const SAMPLE_ENTRIES = [
+        { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 0 },
+        { employee: 'Chris Jacobi', customer: 'Hall', hours: 8, dayOffset: 1 },
+        { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 2 },
+        { employee: 'Chris Jacobi', customer: 'Bryan', hours: 10, dayOffset: 3 },
+        { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 4 },
+        { employee: 'Chris Z', customer: 'Hall', hours: 9, dayOffset: 0 },
+        { employee: 'Chris Z', customer: 'Bryan', hours: 8, dayOffset: 1 },
+        { employee: 'Chris Z', customer: 'McGill', hours: 7, dayOffset: 2 },
+        { employee: 'Chris Z', customer: 'Hall', hours: 8, dayOffset: 3 },
+        { employee: 'Chris Z', customer: 'Bryan', hours: 10, dayOffset: 4 },
+        { employee: 'Doug Kinsey', customer: 'McGill', hours: 10, dayOffset: 0 },
+        { employee: 'Doug Kinsey', customer: 'Hall', hours: 10, dayOffset: 1 },
+        { employee: 'Doug Kinsey', customer: 'Bryan', hours: 10, dayOffset: 2 },
+        { employee: 'Doug Kinsey', customer: 'McGill', hours: 10, dayOffset: 3 },
+        { employee: 'Doug Kinsey', customer: 'Hall', hours: 8, dayOffset: 4 }
+      ];
+
+      // load employees/customers maps
+      const employees = db.prepare('SELECT id, name, aliases_json, role FROM employees').all();
+      const customers = db.prepare('SELECT id, name FROM customers').all();
+      const empMap = new Map();
+      for (const e of employees) {
+        empMap.set(e.name.toLowerCase(), e);
+        try { const aliases = e.aliases_json ? JSON.parse(e.aliases_json) : []; for (const a of aliases||[]) empMap.set(a.toLowerCase(), e); } catch(e){}
+      }
+      const custMap = new Map(customers.map(c => [c.name.toLowerCase(), c]));
+
+      let created = 0, skipped = 0, deleted = 0;
+      const nowTs = new Date().toISOString();
+      const tx = db.transaction(() => {
+        // reset week entries to avoid duplicates
+        const del = db.prepare(`DELETE FROM time_entries WHERE work_date >= ? AND work_date <= ?`);
+        const sy = wk;
+        const sd = new Date(sy);
+        const ed = new Date(sd); ed.setDate(ed.getDate() + 6);
+        const end = `${ed.getFullYear()}-${String(ed.getMonth()+1).padStart(2,'0')}-${String(ed.getDate()).padStart(2,'0')}`;
+        const r = del.run(sy, end);
+        deleted = r.changes || 0;
+
+        for (const entry of SAMPLE_ENTRIES) {
+          const empKey = String(entry.employee || '').toLowerCase();
+          let emp = empMap.get(empKey);
+          if (!emp) emp = employees.find(e => e.name.toLowerCase().includes(empKey) || (e.aliases_json||'').toLowerCase().includes(empKey));
+          const custKey = String(entry.customer || '').toLowerCase();
+          let cust = custMap.get(custKey);
+          if (!cust) cust = customers.find(c => c.name.toLowerCase().includes(custKey));
+          if (!emp || !cust) { skipped++; continue; }
+          if ((emp.role && emp.role === 'admin') || (emp.name || '').toLowerCase().includes('jafid')) { skipped++; continue; }
+
+          const [y,m,d] = sy.split('-').map(Number);
+          const workDate = new Date(y, m-1, d + entry.dayOffset);
+          const workDateYmd = `${workDate.getFullYear()}-${String(workDate.getMonth()+1).padStart(2,'0')}-${String(workDate.getDate()).padStart(2,'0')}`;
+          db.prepare(`INSERT INTO time_entries (id, employee_id, customer_id, work_date, hours, notes, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .run(id('te_'), emp.id, cust.id, workDateYmd, Number(entry.hours), '', 'DRAFT', nowTs, nowTs);
+          created++;
+        }
+      });
+      tx();
+      results[wk] = { created, skipped, deleted };
+    }
+
+    res.json({ ok: true, seeded: results, leftEmpty: currentWeek });
+  } catch (err) {
+    console.error('[admin/seed-weeks]', err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+/** Admin: Simulate a full month by seeding each week of the month
+ * POST /api/admin/simulate-month { month: 'YYYY-MM', reset?: bool, submit?: bool, approve?: bool }
+ */
+app.post('/api/admin/simulate-month', (req, res) => {
+  try {
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(403).json({ error: 'seeding disabled in production' });
+    }
+    const adminSecret = process.env.ADMIN_SECRET;
+    const provided = req.headers['x-admin-secret'] || req.body?.admin_secret;
+    if (adminSecret && provided !== adminSecret) return res.status(403).json({ error: 'admin secret required' });
+
+    const { month, reset = false, submit = false, approve = false } = req.body || {};
+    if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
+
+    // compute month start and next month start
+    const [y, m] = month.split('-').map(Number);
+    const monthStart = `${month}-01`;
+    const nextMonth = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`;
+
+    // helper to compute all sunday week starts intersecting the month
+    const weeks = [];
+    const s = new Date(y, m - 1, 1);
+    const day = s.getDay();
+    const firstSunday = new Date(s); firstSunday.setDate(firstSunday.getDate() - day);
+    const end = new Date(nextMonth.split('-').map(Number)[0], Number(nextMonth.split('-')[1]) - 1, 1);
+    for (let d = new Date(firstSunday); d < end; d.setDate(d.getDate() + 7)) {
+      weeks.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`);
+    }
+
+    const results = {};
+    for (const wk of weeks) {
+      // call simulate-week logic by constructing body and reusing core insertion code (reset/submit/approve per week)
+      // We'll reuse the SAMPLE_ENTRIES pattern from simulate-week
+      const SAMPLE_ENTRIES = [
+        { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 0 },
+        { employee: 'Chris Jacobi', customer: 'Hall', hours: 8, dayOffset: 1 },
+        { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 2 },
+        { employee: 'Chris Jacobi', customer: 'Bryan', hours: 10, dayOffset: 3 },
+        { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 4 },
+        { employee: 'Chris Z', customer: 'Hall', hours: 9, dayOffset: 0 },
+        { employee: 'Chris Z', customer: 'Bryan', hours: 8, dayOffset: 1 },
+        { employee: 'Chris Z', customer: 'McGill', hours: 7, dayOffset: 2 },
+        { employee: 'Chris Z', customer: 'Hall', hours: 8, dayOffset: 3 },
+        { employee: 'Chris Z', customer: 'Bryan', hours: 10, dayOffset: 4 },
+        { employee: 'Doug Kinsey', customer: 'McGill', hours: 10, dayOffset: 0 },
+        { employee: 'Doug Kinsey', customer: 'Hall', hours: 10, dayOffset: 1 },
+        { employee: 'Doug Kinsey', customer: 'Bryan', hours: 10, dayOffset: 2 },
+        { employee: 'Doug Kinsey', customer: 'McGill', hours: 10, dayOffset: 3 },
+        { employee: 'Doug Kinsey', customer: 'Hall', hours: 8, dayOffset: 4 }
+      ];
+
+      // load employees/customers maps
+      const employees = db.prepare('SELECT id, name, aliases_json, role FROM employees').all();
+      const customers = db.prepare('SELECT id, name FROM customers').all();
+      const empMap = new Map();
+      for (const e of employees) {
+        empMap.set(e.name.toLowerCase(), e);
+        try { const aliases = e.aliases_json ? JSON.parse(e.aliases_json) : []; for (const a of aliases||[]) empMap.set(a.toLowerCase(), e); } catch(e){}
+      }
+      const custMap = new Map(customers.map(c => [c.name.toLowerCase(), c]));
+
+      let created = 0, skipped = 0, deleted = 0;
+      const nowTs = new Date().toISOString();
+      const tx = db.transaction(() => {
+        // optionally delete week entries
+        if (reset) {
+          const sd = new Date(wk);
+          const ed = new Date(sd); ed.setDate(ed.getDate() + 6);
+          const endYmd = `${ed.getFullYear()}-${String(ed.getMonth()+1).padStart(2,'0')}-${String(ed.getDate()).padStart(2,'0')}`;
+          const del = db.prepare(`DELETE FROM time_entries WHERE work_date >= ? AND work_date <= ?`);
+          const r = del.run(wk, endYmd); deleted = r.changes || 0;
+        }
+
+        for (const entry of SAMPLE_ENTRIES) {
+          const empKey = String(entry.employee || '').toLowerCase();
+          let emp = empMap.get(empKey);
+          if (!emp) emp = employees.find(e => e.name.toLowerCase().includes(empKey) || (e.aliases_json||'').toLowerCase().includes(empKey));
+          const custKey = String(entry.customer || '').toLowerCase();
+          let cust = custMap.get(custKey);
+          if (!cust) cust = customers.find(c => c.name.toLowerCase().includes(custKey));
+          if (!emp || !cust) { skipped++; continue; }
+          const empNameLower = (emp.name || '').toLowerCase();
+          if ((emp.role && emp.role === 'admin') || empNameLower.includes('jafid')) { skipped++; continue; }
+
+          const [yy,mm,dd] = wk.split('-').map(Number);
+          const workDate = new Date(yy, mm-1, dd + entry.dayOffset);
+          const workDateYmd = `${workDate.getFullYear()}-${String(workDate.getMonth()+1).padStart(2,'0')}-${String(workDate.getDate()).padStart(2,'0')}`;
+
+          const exists = db.prepare(`SELECT id FROM time_entries WHERE employee_id=? AND customer_id=? AND work_date=?`).get(emp.id, cust.id, workDateYmd);
+          if (exists) { skipped++; continue; }
+
+          const status = approve ? 'APPROVED' : (submit ? 'SUBMITTED' : 'DRAFT');
+          db.prepare(`INSERT INTO time_entries (id, employee_id, customer_id, work_date, hours, notes, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .run(id('te_'), emp.id, cust.id, workDateYmd, Number(entry.hours), '', status, nowTs, nowTs);
+          created++;
+        }
+      });
+      tx();
+      results[wk] = { created, skipped, deleted };
+    }
+
+    res.json({ ok: true, month, seeded: results });
+  } catch (err) {
+    console.error('[admin/simulate-month]', err);
     res.status(500).json({ error: String(err?.message || err) });
   }
 });
@@ -653,9 +1305,9 @@ app.get("/api/admin/archives", async (req, res) => {
 });
 
 /** SPA fallbacks - serve app at root */
-app.get("/", (req, res) => res.sendFile(path.resolve("public/app.html")));
-app.get("/app", (req, res) => res.sendFile(path.resolve("public/app.html")));
-app.get("/admin", (req, res) => res.sendFile(path.resolve("public/admin.html")));
+app.get("/", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "app.html")));
+app.get("/app", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "app.html")));
+app.get("/admin", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "admin.html")));
 
 const port = Number(process.env.PORT || 3000);
 app.listen(port, () => {

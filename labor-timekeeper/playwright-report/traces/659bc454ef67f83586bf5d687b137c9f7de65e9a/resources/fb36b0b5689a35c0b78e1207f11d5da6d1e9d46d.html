@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Timekeeper" />
+  <title>Labor Timekeeper</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
+</head>
+<body>
+  <div class="container">
+    <div class="row" style="align-items:center; justify-content:space-between;">
+      <h1>Log Hours</h1>
+      <a href="/admin" class="badge">Admin</a>
+    </div>
+
+    <!-- Employee selector at top -->
+    <div class="card" style="margin-top:12px; padding:12px;">
+      <label class="small muted" for="employee">Who are you?</label>
+      <select id="employee" title="Select employee" style="font-size:1.1rem; padding:8px;">
+        <option value="">-- Select your name --</option>
+      </select>
+    </div>
+
+    <div class="card" style="margin-top:12px;" id="mainCard">
+      <h2>This Week</h2>
+      <div class="muted small" id="weekLabel"></div>
+
+      <div class="row" style="margin-top:12px;">
+        <div class="col" style="flex:2;">
+          <label class="small muted" for="customerSelect">Client</label>
+          <!-- Primary customer dropdown (preferred) -->
+          <select id="customerSelect" title="Select customer"></select>
+          <!-- Legacy free-text input kept but hidden visually -->
+          <input id="customerName" list="customerList" placeholder="Start typing client..." autocomplete="off" style="font-size:1rem; padding:8px; width:100%; display:none" />
+          <datalist id="customerList" style="display:none"></datalist>
+          <div id="customerAddress" class="small muted" style="margin-top:4px; font-style:italic;"></div>
+          <div id="customerConfirm" class="small muted" style="margin-top:4px; font-style:italic;"></div>
+        </div>
+        <div class="col">
+          <label class="small muted" for="day">Day</label>
+          <select id="day" title="Select day"></select>
+        </div>
+        <div class="col">
+          <label class="small muted" for="hours">Hours</label>
+          <input id="hours" placeholder="e.g., 8" inputmode="decimal" />
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px;">
+        <div class="col"><button class="primary" id="saveBtn">Save / Update</button></div>
+        <div class="col"><button id="submitBtn">Submit Week</button></div>
+      </div>
+
+      <hr/>
+
+      <h2>🎤 Speak it</h2>
+      <p class="muted small">Example: "McGill 8 hours Friday" or "8 hours Friday McGill, 2 hours Saturday Hall".</p>
+      <div class="row">
+        <div class="col"><button class="primary" id="recBtn">Start Recording</button></div>
+        <div class="col"><button id="applyVoiceBtn" disabled>Apply Parsed Entries</button></div>
+      </div>
+      <p class="muted small" id="voiceStatus"></p>
+      <div id="voiceBox" class="toast" style="display:none;">
+        <div class="small muted">Transcript</div>
+        <div id="transcript" style="margin:6px 0 10px 0;"></div>
+        <div class="small muted">Parsed entries</div>
+        <div id="parsed"></div>
+      </div>
+
+      <hr/>
+
+      <h2>Entries</h2>
+      <div id="entries"></div>
+    </div>
+  </div>
+
+<script>
+let EMPLOYEE=null, EMPLOYEES=[], CUSTOMERS=[], WEEK=null;
+let mediaRecorder=null, chunks=[], lastParsed=null;
+
+// Storage keys
+const EMPLOYEE_KEY = 'labor_timekeeper_employee';
+const DRAFT_KEY = 'labor_timekeeper_draft';
+
+function el(id){ return document.getElementById(id); }
+function fmt(n){ return (Math.round(n*100)/100).toString(); }
+
+async function api(url, opts){
+  const r = await fetch(url, opts);
+  const j = await r.json().catch(()=>null);
+  if (!r.ok) throw new Error((j && j.error) || 'Request failed');
+  return j;
+}
+
+// Draft persistence
+function saveDraft() {
+  const draft = {
+    customerName: (el('customerName') && el('customerName').value) || '',
+    day: el('day').value,
+    hours: el('hours').value,
+    savedAt: new Date().toISOString()
+  };
+  localStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+}
+
+function loadDraft() {
+  try {
+    const saved = localStorage.getItem(DRAFT_KEY);
+    if (!saved) return null;
+    return JSON.parse(saved);
+  } catch { return null; }
+}
+
+function clearDraft() {
+  localStorage.removeItem(DRAFT_KEY);
+}
+
+function restoreDraft() {
+  const draft = loadDraft();
+  if (!draft) return;
+  
+  const savedAt = new Date(draft.savedAt);
+  const hoursSinceSave = (Date.now() - savedAt.getTime()) / (1000 * 60 * 60);
+  if (hoursSinceSave > 24) { clearDraft(); return; }
+  
+  if (draft.customerName) el('customerName').value = draft.customerName;
+  if (draft.day) el('day').value = draft.day;
+  if (draft.hours) el('hours').value = draft.hours;
+  
+  renderCustomerConfirm(draft.customerName || '');
+}
+
+async function init(){
+  // Load employees for selector
+  EMPLOYEES = await api('/api/employees');
+  el('employee').innerHTML = '<option value="">-- Select your name --</option>' + 
+    EMPLOYEES.map(e => `<option value="${e.id}">${e.name}</option>`).join('');
+
+  // Restore previously selected employee
+  const savedEmpId = localStorage.getItem(EMPLOYEE_KEY);
+  if (savedEmpId) {
+    const emp = EMPLOYEES.find(e => e.id === savedEmpId);
+    if (emp) {
+      el('employee').value = savedEmpId;
+      EMPLOYEE = emp;
+    }
+  }
+
+  // Employee change handler
+  el('employee').onchange = async () => {
+    const empId = el('employee').value;
+    if (!empId) {
+      EMPLOYEE = null;
+      localStorage.removeItem(EMPLOYEE_KEY);
+      el('mainCard').style.opacity = '0.5';
+      el('mainCard').style.pointerEvents = 'none';
+      return;
+    }
+    EMPLOYEE = EMPLOYEES.find(e => e.id === empId);
+    localStorage.setItem(EMPLOYEE_KEY, empId);
+    el('mainCard').style.opacity = '1';
+    el('mainCard').style.pointerEvents = 'auto';
+    await loadWeek();
+  };
+
+  // Load customers into datalist for free-text client input
+  CUSTOMERS = await api('/api/customers');
+  el('customerList').innerHTML = CUSTOMERS.map(c => {
+    const label = c.address ? `${c.name} — ${c.address}` : c.name;
+    return `<option value="${c.name}" data-id="${c.id}" data-address="${c.address || ''}">${label}</option>`;
+  }).join('');
+
+  // Also populate hidden select for compatibility with legacy tests
+  el('customerSelect').innerHTML = '<option value="">-- Select customer --</option>' + CUSTOMERS.map(c => {
+    const label = c.address ? `${c.name} — ${c.address}` : c.name;
+    return `<option value="${c.id}" data-name="${c.name}" data-address="${c.address || ''}">${label}</option>`;
+  }).join('');
+  // Keep address updated when select changes (tests may interact with select)
+  el('customerSelect').addEventListener('change', updateCustomerAddress);
+
+  // Customer input handlers
+  el('customerName').addEventListener('input', (e)=>{ renderCustomerConfirm(e.target.value); saveDraftDebounced(); });
+  el('customerName').addEventListener('change', (e)=>{ renderCustomerConfirm(e.target.value); saveDraftDebounced(); });
+
+  // If employee already selected, load week
+  if (EMPLOYEE) {
+    await loadWeek();
+    el('mainCard').style.opacity = '1';
+    el('mainCard').style.pointerEvents = 'auto';
+  } else {
+    el('mainCard').style.opacity = '0.5';
+    el('mainCard').style.pointerEvents = 'none';
+  }
+
+  el('saveBtn').onclick = saveEntry;
+  el('submitBtn').onclick = submitWeek;
+
+  restoreDraft();
+
+  ['customerName', 'day', 'hours'].forEach(id => {
+    if (el(id)) {
+      el(id).addEventListener('input', saveDraft);
+      el(id).addEventListener('change', saveDraft);
+    }
+  });
+
+  await setupRecorder();
+}
+
+async function loadWeek(){
+  if (!EMPLOYEE) return;
+  const week = await api(`/api/time-entries?employee_id=${EMPLOYEE.id}`);
+  WEEK = week;
+  el('weekLabel').textContent = `Week starting ${week.week_start}`;
+  el('day').innerHTML = week.days.map(d=>`<option value="${d.ymd}">${d.dow} (${d.ymd})</option>`).join('');
+  renderEntries(week.entries);
+}
+
+function renderEntries(entries){
+  if (!entries.length){
+    el('entries').innerHTML = '<p class="muted">No entries yet.</p>';
+    return;
+  }
+  const rows = entries.map(e=>{
+    const badge = e.status==='APPROVED'
+      ? '<span class="badge">APPROVED</span>'
+      : e.status==='SUBMITTED'
+        ? '<span class="badge">SUBMITTED</span>'
+        : '<span class="badge">DRAFT</span>';
+    return `<tr>
+      <td>${e.work_date}</td>
+      <td>${e.customer_name}</td>
+      <td>${fmt(Number(e.hours))}</td>
+      <td>${badge}</td>
+    </tr>`;
+  }).join('');
+  el('entries').innerHTML = `
+    <table>
+      <thead><tr><th>Date</th><th>Customer</th><th>Hours</th><th>Status</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+}
+
+async function refresh(){
+  await loadWeek();
+  CUSTOMERS = await api('/api/customers');
+  el('customerList').innerHTML = CUSTOMERS.map(c => {
+    const label = c.address ? `${c.name} — ${c.address}` : c.name;
+    return `<option value="${c.name}" data-id="${c.id}" data-address="${c.address || ''}">${label}</option>`;
+  }).join('');
+
+  // Mirror into hidden select for compatibility
+  el('customerSelect').innerHTML = '<option value="">-- Select customer --</option>' + CUSTOMERS.map(c => {
+    const label = c.address ? `${c.name} — ${c.address}` : c.name;
+    return `<option value="${c.id}" data-name="${c.name}" data-address="${c.address || ''}">${label}</option>`;
+  }).join('');
+}
+
+function findCustomerByName(name) {
+  if (!name) return null;
+  const lower = name.toLowerCase().trim();
+  return CUSTOMERS.find(c => c.name.toLowerCase() === lower);
+}
+
+function renderCustomerConfirm(name) {
+  const c = findCustomerByName(name);
+  const div = el('customerConfirm');
+  if (!name || !name.trim()) { div.textContent = ''; return; }
+  if (c) div.textContent = c.address ? `Confirm address: ${c.address}` : 'No address on file.';
+  else div.textContent = 'New client will be created (address optional).';
+}
+
+// Debounce helper for draft saves
+let _draftTimer = null;
+function saveDraftDebounced(timeout=400) {
+  if (_draftTimer) clearTimeout(_draftTimer);
+  _draftTimer = setTimeout(()=>{ saveDraft(); _draftTimer = null; }, timeout);
+}
+
+function updateCustomerAddress() {
+  const select = el('customerSelect');
+  const selectedOption = select.options[select.selectedIndex];
+  if (selectedOption && selectedOption.value) {
+    const address = selectedOption.dataset.address;
+    if (address) {
+      el('customerAddress').textContent = `📍 ${address}`;
+    } else {
+      el('customerAddress').textContent = '';
+    }
+  } else {
+    el('customerAddress').textContent = '';
+  }
+}
+
+async function saveEntry(){
+  if (!EMPLOYEE) { alert('Please select your name first'); return; }
+  
+  // Prefer selected customer from dropdown; fallback to free-text input
+  let customer_id = null;
+  const selectedOption = el('customerSelect')?.options[el('customerSelect')?.selectedIndex];
+  const customerName = (el('customerName') && el('customerName').value || '').trim();
+  if (selectedOption && selectedOption.value) {
+    customer_id = selectedOption.value;
+  }
+  const work_date = el('day').value;
+  const hours = parseFloat(el('hours').value);
+  
+  if ((!customer_id && !customerName) || !work_date || !isFinite(hours)) {
+    alert('Enter a client name, pick a day, and enter hours');
+    return;
+  }
+
+  // If no selected id, try to find by name or create
+  if (!customer_id) {
+    const existing = findCustomerByName(customerName);
+    if (existing) {
+      customer_id = existing.id;
+    } else {
+      const res = await api('/api/customers/find-or-create', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ name: customerName, address: '' })
+      });
+      customer_id = res.customer.id;
+      await refresh();
+    }
+  }
+  
+  await api('/api/time-entries', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ employee_id: EMPLOYEE.id, customer_id, work_date, hours })
+  });
+  el('customerName').value = '';
+  el('hours').value = '';
+  el('customerConfirm').textContent = '';
+  clearDraft();
+  await refresh();
+}
+
+async function submitWeek(){
+  if (!EMPLOYEE) { alert('Please select your name first'); return; }
+  await api('/api/submit-week', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ employee_id: EMPLOYEE.id, week_start: WEEK.week_start })
+  });
+  alert('Submitted!');
+  await refresh();
+}
+
+async function setupRecorder(){
+  const recBtn = el('recBtn');
+  const applyBtn = el('applyVoiceBtn');
+
+  applyBtn.onclick = applyParsed;
+
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+    
+    // Detect supported MIME type (Safari doesn't support webm)
+    let mimeType = 'audio/webm';
+    if (!MediaRecorder.isTypeSupported('audio/webm')) {
+      if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        mimeType = 'audio/mp4';
+      } else if (MediaRecorder.isTypeSupported('audio/aac')) {
+        mimeType = 'audio/aac';
+      } else if (MediaRecorder.isTypeSupported('audio/ogg')) {
+        mimeType = 'audio/ogg';
+      } else {
+        // Fallback - let browser choose
+        mimeType = undefined;
+      }
+    }
+    
+    const recorderOptions = mimeType ? { mimeType } : {};
+    mediaRecorder = new MediaRecorder(stream, recorderOptions);
+    const actualMime = mediaRecorder.mimeType || 'audio/webm';
+
+    mediaRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+
+    mediaRecorder.onstop = async () => {
+      try{
+        el('voiceStatus').textContent = 'Processing...';
+        const blob = new Blob(chunks, { type: actualMime });
+        const ext = actualMime.includes('mp4') ? 'mp4' : actualMime.includes('ogg') ? 'ogg' : 'webm';
+        const fd = new FormData();
+        fd.append('audio', blob, `command.${ext}`);
+        const result = await api('/api/voice/command', { method:'POST', body: fd });
+        showVoiceResult(result);
+      } catch(err){
+        el('voiceStatus').textContent = err.message;
+      }
+    };
+
+    recBtn.onclick = () => {
+      if (mediaRecorder.state === 'inactive'){
+        chunks = [];
+        mediaRecorder.start();
+        recBtn.textContent = 'Stop Recording';
+        el('voiceStatus').textContent = 'Recording...';
+        applyBtn.disabled = true;
+        lastParsed = null;
+      } else {
+        mediaRecorder.stop();
+        recBtn.textContent = 'Start Recording';
+      }
+    };
+  } catch(e){
+    el('voiceStatus').textContent = 'Microphone permission denied or unsupported browser.';
+    recBtn.disabled = true;
+  }
+}
+
+function showVoiceResult(result){
+  el('voiceStatus').textContent = '';
+  el('voiceBox').style.display = 'block';
+  el('transcript').textContent = result.transcript || '';
+  const entries = result.parsed?.entries || [];
+  lastParsed = entries;
+
+  el('parsed').innerHTML = entries.map((e)=>{
+    const warn = e.customer_id
+      ? ''
+      : ' <span class="badge" style="border-color:rgba(255,107,107,.4); color:#ffb3b3;">needs customer match</span>';
+    return `<div style="margin:6px 0;">
+      <strong>${e.work_date}</strong> — ${e.customer_name} — ${fmt(Number(e.hours))} hrs${warn}
+    </div>`;
+  }).join('') || '<div class="muted">No entries parsed.</div>';
+
+  el('applyVoiceBtn').disabled = entries.length === 0 || entries.some(e=>!e.customer_id);
+}
+
+async function applyParsed(){
+  if (!EMPLOYEE) { alert('Please select your name first'); return; }
+  if (!lastParsed?.length) return;
+  for (const e of lastParsed){
+    await api('/api/time-entries', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        employee_id: EMPLOYEE.id,
+        customer_id: e.customer_id,
+        work_date: e.work_date,
+        hours: e.hours,
+        notes: e.notes || ''
+      })
+    });
+  }
+  alert('Applied!');
+  await refresh();
+}
+
+init().catch(e=>{
+  console.error(e);
+  alert(e.message || 'Failed to load');
+});
+
+// Register service worker for PWA
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js')
+    .then(() => console.log('SW registered'))
+    .catch(err => console.warn('SW registration failed:', err));
+}
+</script>
+
+</body>
+</html>

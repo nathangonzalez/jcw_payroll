@@ -1,0 +1,47 @@
+{"version":8,"type":"context-options","origin":"testRunner","browserName":"","playwrightVersion":"1.57.0","options":{},"platform":"win32","wallTime":1768397937194,"monotonicTime":129417.742,"sdkLanguage":"javascript"}
+{"type":"before","callId":"hook@1","stepId":"hook@1","startTime":129418.886,"class":"Test","method":"hook","title":"Before Hooks","params":{},"stack":[]}
+{"type":"before","callId":"fixture@26","stepId":"fixture@26","parentId":"hook@1","startTime":129423.854,"class":"Test","method":"fixture","title":"Fixture \"request\"","params":{},"stack":[]}
+{"type":"before","callId":"pw:api@27","stepId":"pw:api@27","parentId":"fixture@26","startTime":129424.365,"class":"Test","method":"pw:api","title":"Create request context","params":{"acceptDownloads":"true","bypassCSP":"false","colorScheme":"light","hasTouch":"false","ignoreHTTPSErrors":"false","isMobile":"false","javaScriptEnabled":"true","locale":"en-US","offline":"false","viewport":"Object","baseURL":"http://localhost:3000","serviceWorkers":"allow","extraHTTPHeaders":"undefined","storageState":"undefined","tracesDir":"C:\\Users\\natha\\dev\\repos\\jcw_payroll\\labor-timekeeper\\test-results\\.playwright-artifacts-0\\traces","clientCertificates":"undefined"},"stack":[]}
+{"type":"stderr","timestamp":129424.444,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m=> apiRequest.newContext started \u001b[38;5;45m+58ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129425.378,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m<= apiRequest.newContext succeeded \u001b[38;5;45m+1ms\u001b[0m\n"}
+{"type":"after","callId":"pw:api@27","endTime":129425.417,"annotations":[]}
+{"type":"after","callId":"fixture@26","endTime":129426.462,"annotations":[]}
+{"type":"after","callId":"hook@1","endTime":129426.493,"annotations":[]}
+{"type":"before","callId":"pw:api@28","stepId":"pw:api@28","startTime":129428.204,"class":"Test","method":"pw:api","title":"GET \"/api/employees\"","params":{"url":"http://localhost:3000/api/employees","params":"undefined","encodedParams":"undefined","method":"GET","headers":"undefined","postData":"undefined","jsonData":"undefined","formData":"undefined","multipartData":"undefined","timeout":"0","failOnStatusCode":"undefined","ignoreHTTPSErrors":"undefined","maxRedirects":"undefined","maxRetries":"undefined","__testHookLookup":"undefined"},"stack":[{"file":"C:\\Users\\natha\\dev\\repos\\jcw_payroll\\labor-timekeeper\\tests\\labor-timekeeper.spec.cjs","line":121,"column":36}]}
+{"type":"stderr","timestamp":129428.309,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m=> apiRequestContext.get started \u001b[38;5;45m+2ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129429.662,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m→ GET http://localhost:3000/api/employees \u001b[38;5;45m+2ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129429.718,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  user-agent: Playwright/1.57.0 (x64; windows 10.0) node/22.19 \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129429.745,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  accept: */* \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129429.766,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  accept-encoding: gzip,deflate,br \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129433.201,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m← 200 OK \u001b[38;5;45m+3ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129433.357,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  cross-origin-opener-policy: same-origin \u001b[38;5;45m+1ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129433.474,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  cross-origin-resource-policy: same-origin \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129433.521,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  origin-agent-cluster: ?1 \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129433.549,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  referrer-policy: no-referrer \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129433.577,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  strict-transport-security: max-age=15552000; includeSubDomains \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129433.601,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  x-content-type-options: nosniff \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129433.624,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  x-dns-prefetch-control: off \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129433.646,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  x-download-options: noopen \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129433.671,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  x-frame-options: SAMEORIGIN \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129433.696,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  x-permitted-cross-domain-policies: none \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129433.718,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  x-xss-protection: 0 \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129433.742,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  content-type: application/json; charset=utf-8 \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129433.766,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  content-length: 611 \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129433.789,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  etag: W/\"263-sog9yrMIVfqui4uilO4aDVaQ4NI\" \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129433.812,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  date: Wed, 14 Jan 2026 13:38:57 GMT \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129433.836,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  connection: keep-alive \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129433.863,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  keep-alive: timeout=5 \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":129436.162,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m<= apiRequestContext.get succeeded \u001b[38;5;45m+2ms\u001b[0m\n"}
+{"type":"after","callId":"pw:api@28","endTime":129436.241,"annotations":[]}
+{"type":"before","callId":"expect@29","stepId":"expect@29","startTime":129437.42,"class":"Test","method":"expect","title":"Expect \"toBe\"","params":{"expected":"true"},"stack":[{"file":"C:\\Users\\natha\\dev\\repos\\jcw_payroll\\labor-timekeeper\\tests\\labor-timekeeper.spec.cjs","line":122,"column":27}]}
+{"type":"after","callId":"expect@29","endTime":129437.575,"annotations":[]}
+{"type":"before","callId":"expect@30","stepId":"expect@30","startTime":129439.889,"class":"Test","method":"expect","title":"Expect \"toBe\"","params":{"expected":"true"},"stack":[{"file":"C:\\Users\\natha\\dev\\repos\\jcw_payroll\\labor-timekeeper\\tests\\labor-timekeeper.spec.cjs","line":124,"column":33}]}
+{"type":"after","callId":"expect@30","endTime":129440.06,"annotations":[]}
+{"type":"before","callId":"expect@31","stepId":"expect@31","startTime":129440.974,"class":"Test","method":"expect","title":"Expect \"toBeGreaterThan\"","params":{},"stack":[{"file":"C:\\Users\\natha\\dev\\repos\\jcw_payroll\\labor-timekeeper\\tests\\labor-timekeeper.spec.cjs","line":125,"column":25}]}
+{"type":"after","callId":"expect@31","endTime":129441.082,"annotations":[]}
+{"type":"before","callId":"hook@32","stepId":"hook@32","startTime":129441.358,"class":"Test","method":"hook","title":"After Hooks","params":{},"stack":[]}
+{"type":"before","callId":"fixture@33","stepId":"fixture@33","parentId":"hook@32","startTime":129441.796,"class":"Test","method":"fixture","title":"Fixture \"request\"","params":{},"stack":[]}
+{"type":"after","callId":"fixture@33","endTime":129462.599,"annotations":[]}
+{"type":"before","callId":"fixture@41","stepId":"fixture@41","parentId":"hook@32","startTime":129465.308,"class":"Test","method":"fixture","title":"Fixture \"baseURL\"","params":{},"stack":[{"file":"project#chromium","line":1,"column":1}],"group":"configuration"}
+{"type":"after","callId":"fixture@41","endTime":129465.33,"annotations":[]}
+{"type":"after","callId":"hook@32","endTime":129469.398,"annotations":[]}

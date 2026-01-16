@@ -1,0 +1,22 @@
+HTTP/1.1 200 OK
+content-type: application/json; charset=utf-8
+vary: Accept-Encoding
+cross-origin-opener-policy: same-origin
+cross-origin-resource-policy: same-origin
+origin-agent-cluster: ?1
+referrer-policy: no-referrer
+strict-transport-security: max-age=15552000; includeSubDomains
+x-content-type-options: nosniff
+x-dns-prefetch-control: off
+x-download-options: noopen
+x-frame-options: SAMEORIGIN
+x-permitted-cross-domain-policies: none
+x-xss-protection: 0
+etag: W/"1f-pab90rnkkJv/MKftdpuT0VUKaZY"
+x-cloud-trace-context: cee0594a0b447453213b6596670a1ee2;o=1
+date: Wed, 14 Jan 2026 18:57:30 GMT
+server: Google Frontend
+Content-Length: 31
+Alt-Svc: h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+
+{"ok":true,"count":0,"rows":[]}

@@ -52,6 +52,49 @@ CREATE TABLE IF NOT EXISTS customers (
     // Column might already exist, ignore
   }
 
+  // Migration: remove legacy `pin_hash` column from employees if present
+  try {
+    const empCols = db.prepare("PRAGMA table_info(employees)").all();
+    const hasPinHash = empCols.some(c => c.name === 'pin_hash');
+    if (hasPinHash) {
+      console.log('[migrate] Removing legacy pin_hash column from employees');
+      db.exec('BEGIN');
+      // Rename old table
+      db.exec('ALTER TABLE employees RENAME TO employees_old');
+      // Create new employees table without pin_hash
+      db.exec(`
+CREATE TABLE IF NOT EXISTS employees (
+  id TEXT PRIMARY KEY,
+  name TEXT UNIQUE NOT NULL,
+  default_bill_rate REAL NOT NULL DEFAULT 0,
+  default_pay_rate REAL NOT NULL DEFAULT 0,
+  is_admin INTEGER NOT NULL DEFAULT 0,
+  aliases_json TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL
+);
+      `);
+      // Copy data across (preserve ids)
+      db.exec(`INSERT INTO employees (id, name, default_bill_rate, default_pay_rate, is_admin, aliases_json, created_at)
+        SELECT id, name, default_bill_rate, default_pay_rate, is_admin, aliases_json, created_at FROM employees_old`);
+      // Drop old table
+      db.exec('DROP TABLE IF EXISTS employees_old');
+      db.exec('COMMIT');
+      console.log('[migrate] pin_hash column removed');
+    }
+  } catch (err) {
+    try { db.exec('ROLLBACK'); } catch(e){}
+    console.warn('[migrate] failed to remove pin_hash column', err?.message || err);
+  }
+
+  // Purge known test/admin account 'Jafid' if present
+  try {
+    const del = db.prepare("DELETE FROM employees WHERE lower(name) LIKE '%jafid%'");
+    const r = del.run();
+    if (r.changes && r.changes > 0) console.log('[migrate] Removed Jafid employee(s):', r.changes);
+  } catch (err) {
+    console.warn('[migrate] failed to delete Jafid', err?.message || err);
+  }
+
   db.exec(`
 
 CREATE TABLE IF NOT EXISTS rate_overrides (

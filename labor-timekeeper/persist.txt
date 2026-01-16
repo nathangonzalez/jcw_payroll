@@ -44,6 +44,9 @@ Invoke-RestMethod -Uri "$baseUrl/api/admin/seed" -Method POST
 - public/admin.html: Added Select All checkbox, total row in approvals table
 - lib/secrets.js: Loads secrets from Google Secret Manager
 - Voice recording: Safari/iOS compatibility (webm/mp4/aac/ogg fallbacks)
+ - server.js: Added admin simulation endpoint `/api/admin/simulate-week` to create sample entries for a given week
+ - public/admin.html: Added "Simulate Week" button and checkboxes (Reset / Mark Submitted / Mark Approved)
+ - public/app.html: Wired `Submit Week` button to backend (`submitWeek()`), and improved customer select behavior
 
 ## KEY FILES
 - server.js: Express API server, main entry point
@@ -80,6 +83,8 @@ Invoke-RestMethod -Uri "$baseUrl/api/admin/seed" -Method POST
 ## TODO / NEXT STEPS
 1. Test admin Load button locally
 2. Test Weekly and Monthly export buttons
+3. Test `Simulate Week` admin feature (use week 2026-01-05, try reset+submit+approve)
+4. Verify employee `Submit Week` workflow now submits and updates status
 3. Verify date column appears in exported XLSX
 4. May need to fix admin.html JavaScript if buttons not working
 5. Run UAT tests after fixes

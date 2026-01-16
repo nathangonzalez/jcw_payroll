@@ -1,0 +1,58 @@
+{"version":8,"type":"context-options","origin":"testRunner","browserName":"","playwrightVersion":"1.57.0","options":{},"platform":"win32","wallTime":1768397876652,"monotonicTime":68876.388,"sdkLanguage":"javascript"}
+{"type":"before","callId":"hook@1","stepId":"hook@1","startTime":68877.503,"class":"Test","method":"hook","title":"Before Hooks","params":{},"stack":[]}
+{"type":"before","callId":"fixture@27","stepId":"fixture@27","parentId":"hook@1","startTime":68883.892,"class":"Test","method":"fixture","title":"Fixture \"context\"","params":{},"stack":[]}
+{"type":"before","callId":"pw:api@28","stepId":"pw:api@28","parentId":"fixture@27","startTime":68884.858,"class":"Test","method":"pw:api","title":"Create context","params":{"acceptDownloads":"accept","bypassCSP":"false","colorScheme":"light","hasTouch":"false","ignoreHTTPSErrors":"false","isMobile":"false","javaScriptEnabled":"true","locale":"en-US","offline":"false","viewport":"Object","baseURL":"http://localhost:3000","serviceWorkers":"allow","selectorEngines":"[]","testIdAttributeName":"data-testid","noDefaultViewport":"false","extraHTTPHeaders":"undefined","storageState":"undefined","reducedMotion":"undefined","forcedColors":"undefined","contrast":"undefined","clientCertificates":"undefined"},"stack":[]}
+{"type":"stderr","timestamp":68884.976,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m=> browser.newContext started \u001b[38;5;45m+141ms\u001b[0m\n"}
+{"type":"stderr","timestamp":69861.35,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"commit\" event fired \u001b[38;5;45m+976ms\u001b[0m\n"}
+{"type":"stderr","timestamp":69864.102,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"domcontentloaded\" event fired \u001b[38;5;45m+3ms\u001b[0m\n"}
+{"type":"stderr","timestamp":69864.209,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"load\" event fired \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":69913.089,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"commit\" event fired \u001b[38;5;45m+49ms\u001b[0m\n"}
+{"type":"stderr","timestamp":69913.221,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  navigated to \"https://playwright/index.html\" \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":70044.808,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"domcontentloaded\" event fired \u001b[38;5;45m+131ms\u001b[0m\n"}
+{"type":"stderr","timestamp":70045.613,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"load\" event fired \u001b[38;5;45m+1ms\u001b[0m\n"}
+{"type":"stderr","timestamp":70050.741,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m<= browser.newContext succeeded \u001b[38;5;45m+5ms\u001b[0m\n"}
+{"type":"after","callId":"pw:api@28","endTime":70050.792,"annotations":[]}
+{"type":"after","callId":"fixture@27","endTime":70053.519,"annotations":[]}
+{"type":"before","callId":"fixture@29","stepId":"fixture@29","parentId":"hook@1","startTime":70054.3,"class":"Test","method":"fixture","title":"Fixture \"page\"","params":{},"stack":[]}
+{"type":"before","callId":"pw:api@30","stepId":"pw:api@30","parentId":"fixture@29","startTime":70056.971,"class":"Test","method":"pw:api","title":"Create page","params":{},"stack":[]}
+{"type":"stderr","timestamp":70057.152,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m=> browserContext.newPage started \u001b[38;5;45m+7ms\u001b[0m\n"}
+{"type":"stderr","timestamp":70259.661,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m<= browserContext.newPage succeeded \u001b[38;5;45m+202ms\u001b[0m\n"}
+{"type":"after","callId":"pw:api@30","endTime":70259.748,"annotations":[]}
+{"type":"after","callId":"fixture@29","endTime":70259.956,"annotations":[]}
+{"type":"after","callId":"hook@1","endTime":70260.018,"annotations":[]}
+{"type":"before","callId":"pw:api@31","stepId":"pw:api@31","startTime":70262.273,"class":"Test","method":"pw:api","title":"Navigate to \"/app\"","params":{"url":"http://localhost:3000/app","waitUntil":"load","timeout":"0"},"stack":[{"file":"C:\\Users\\natha\\dev\\repos\\jcw_payroll\\labor-timekeeper\\tests\\labor-timekeeper.spec.cjs","line":14,"column":16}]}
+{"type":"stderr","timestamp":70262.387,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m=> page.goto started \u001b[38;5;45m+3ms\u001b[0m\n"}
+{"type":"stderr","timestamp":70665.054,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"networkidle\" event fired \u001b[38;5;45m+403ms\u001b[0m\n"}
+{"type":"stderr","timestamp":71937.442,"text":"  \u001b[38;5;45;1mpw:api \u001b[0mnavigating to \"http://localhost:3000/app\", waiting until \"load\" \u001b[38;5;45m+1s\u001b[0m\n"}
+{"type":"stderr","timestamp":71982.185,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"commit\" event fired \u001b[38;5;45m+45ms\u001b[0m\n"}
+{"type":"stderr","timestamp":71982.477,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  navigated to \"http://localhost:3000/app\" \u001b[38;5;45m+0ms\u001b[0m\n"}
+{"type":"stderr","timestamp":72093.63,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"domcontentloaded\" event fired \u001b[38;5;45m+111ms\u001b[0m\n"}
+{"type":"stderr","timestamp":72095.16,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  \"load\" event fired \u001b[38;5;45m+2ms\u001b[0m\n"}
+{"type":"stderr","timestamp":72126.416,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m<= page.goto succeeded \u001b[38;5;45m+31ms\u001b[0m\n"}
+{"type":"after","callId":"pw:api@31","endTime":72126.487,"annotations":[]}
+{"type":"before","callId":"expect@32","stepId":"expect@32","startTime":72129.406,"class":"Test","method":"expect","title":"Expect \"toBeVisible\"","params":{},"stack":[{"file":"C:\\Users\\natha\\dev\\repos\\jcw_payroll\\labor-timekeeper\\tests\\labor-timekeeper.spec.cjs","line":15,"column":45}]}
+{"type":"stderr","timestamp":72131.865,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m=> expect.toBeVisible started \u001b[38;5;45m+5ms\u001b[0m\n"}
+{"type":"stderr","timestamp":72189.735,"text":"  \u001b[38;5;45;1mpw:api \u001b[0mExpect \"toBeVisible\" with timeout 5000ms \u001b[38;5;45m+58ms\u001b[0m\n"}
+{"type":"stderr","timestamp":72190.123,"text":"  \u001b[38;5;45;1mpw:api \u001b[0mwaiting for locator('#employee') \u001b[38;5;45m+1ms\u001b[0m\n"}
+{"type":"stderr","timestamp":72266.293,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  locator resolved to <select id=\"employee\" title=\"Select employee\">…</select> \u001b[38;5;45m+76ms\u001b[0m\n"}
+{"type":"stderr","timestamp":72273.505,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m<= expect.toBeVisible succeeded \u001b[38;5;45m+7ms\u001b[0m\n"}
+{"type":"after","callId":"expect@32","endTime":72273.71,"annotations":[]}
+{"type":"before","callId":"expect@33","stepId":"expect@33","startTime":72276.352,"class":"Test","method":"expect","title":"Expect \"toContainText\"","params":{"expected":"Log Hours"},"stack":[{"file":"C:\\Users\\natha\\dev\\repos\\jcw_payroll\\labor-timekeeper\\tests\\labor-timekeeper.spec.cjs","line":16,"column":38}]}
+{"type":"stderr","timestamp":72278.769,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m=> expect.toContainText started \u001b[38;5;45m+5ms\u001b[0m\n"}
+{"type":"stderr","timestamp":72288.61,"text":"  \u001b[38;5;45;1mpw:api \u001b[0mExpect \"toContainText\" with timeout 5000ms \u001b[38;5;45m+10ms\u001b[0m\n"}
+{"type":"stderr","timestamp":72288.982,"text":"  \u001b[38;5;45;1mpw:api \u001b[0mwaiting for locator('h1') \u001b[38;5;45m+1ms\u001b[0m\n"}
+{"type":"stderr","timestamp":72295.19,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m  locator resolved to <h1>Log Hours</h1> \u001b[38;5;45m+6ms\u001b[0m\n"}
+{"type":"stderr","timestamp":72304.48,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m<= expect.toContainText succeeded \u001b[38;5;45m+9ms\u001b[0m\n"}
+{"type":"after","callId":"expect@33","endTime":72304.605,"annotations":[]}
+{"type":"before","callId":"hook@34","stepId":"hook@34","startTime":72305.425,"class":"Test","method":"hook","title":"After Hooks","params":{},"stack":[]}
+{"type":"before","callId":"fixture@35","stepId":"fixture@35","parentId":"hook@34","startTime":72306.576,"class":"Test","method":"fixture","title":"Fixture \"page\"","params":{},"stack":[]}
+{"type":"after","callId":"fixture@35","endTime":72306.715,"annotations":[]}
+{"type":"before","callId":"fixture@36","stepId":"fixture@36","parentId":"hook@34","startTime":72307.129,"class":"Test","method":"fixture","title":"Fixture \"context\"","params":{},"stack":[]}
+{"type":"before","callId":"pw:api@37","stepId":"pw:api@37","parentId":"fixture@36","startTime":72388.725,"class":"Test","method":"pw:api","title":"Close context","params":{"reason":"Test ended."},"stack":[]}
+{"type":"stderr","timestamp":72388.84,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m=> browserContext.close started \u001b[38;5;45m+85ms\u001b[0m\n"}
+{"type":"stderr","timestamp":72464.399,"text":"  \u001b[38;5;45;1mpw:api \u001b[0m<= browserContext.close succeeded \u001b[38;5;45m+75ms\u001b[0m\n"}
+{"type":"after","callId":"pw:api@37","endTime":72464.497,"annotations":[]}
+{"type":"after","callId":"fixture@36","endTime":72464.623,"annotations":[]}
+{"type":"before","callId":"fixture@46","stepId":"fixture@46","parentId":"hook@34","startTime":72468.372,"class":"Test","method":"fixture","title":"Fixture \"baseURL\"","params":{},"stack":[{"file":"project#chromium","line":1,"column":1}],"group":"configuration"}
+{"type":"after","callId":"fixture@46","endTime":72468.404,"annotations":[]}
+{"type":"after","callId":"hook@34","endTime":72473.348,"annotations":[]}

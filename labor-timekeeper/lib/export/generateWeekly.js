@@ -64,6 +64,8 @@ export async function generateWeeklyExports({ db, weekStart }) {
     totalRegular: 0,
     totalOT: 0,
     totalAmount: 0,
+    adminAmount: 0,
+    hourlyAmount: 0,
   };
 
   // Generate one workbook per employee
@@ -157,6 +159,31 @@ export async function generateWeeklyExports({ db, weekStart }) {
     // Category info row
     ws.addRow([`Category: ${category.toUpperCase()}`, "", "", "", "", ""]);
 
+    // Per-employee hourly/admin subtotals and grand total
+    const empHourlyAmount = category === 'admin' ? 0 : round2(empTotalAmount);
+    const empAdminAmount = category === 'admin' ? round2(empTotalAmount) : 0;
+    const empGrandTotal = round2(empHourlyAmount + empAdminAmount);
+
+    ws.addRow([]);
+    const hourlyRow = ws.addRow(["HOURLY SUBTOTAL", "", "", "", "", empHourlyAmount]);
+    const adminRow = ws.addRow(["ADMIN SUBTOTAL", "", "", "", "", empAdminAmount]);
+    const grandRow = ws.addRow(["GRAND TOTAL", "", "", "", "", empGrandTotal]);
+    hourlyRow.font = { bold: true };
+    adminRow.font = { bold: true };
+    grandRow.font = { bold: true, color: { argb: 'FF0000' } };
+    hourlyRow.fill = adminRow.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFFAF3E0" },
+    };
+    grandRow.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFE8F8E0" },
+    };
+    // Ensure currency formatting for the totals column
+    ws.getColumn(6).numFmt = '"$"#,##0.00';
+
     // Format columns
     ws.columns = [
       { width: 12 },  // Date
@@ -175,6 +202,49 @@ export async function generateWeeklyExports({ db, weekStart }) {
     const safeName = emp.name.replace(/[^a-zA-Z0-9]/g, "_");
     const filename = `${safeName}_${weekStart}.xlsx`;
     const filepath = path.join(outputDir, filename);
+    // Also include a second sheet that matches the "Jason" schema requested
+    const jasonSheet = workbook.addWorksheet("Jason Schema");
+    // Jason schema: Employee, Employee ID, Date, Client, Hours, Rate, Total, Type, Notes
+    jasonSheet.addRow(["Employee", "Employee ID", "Date", "Client", "Hours", "Rate", "Total", "Type", "Notes"]);
+    jasonSheet.getRow(1).font = { bold: true };
+
+    for (const entry of processedEntries) {
+      const hours = Number(entry.hours);
+      const rate = entry.rate;
+      let type = entry.type || "Regular";
+      if (entry.holidayName) type = "Holiday";
+      if (entry.notes?.toLowerCase().includes("pto")) type = "PTO";
+      const otMultiplier = type === "OT" ? 1.5 : 1;
+      const total = round2(hours * rate * otMultiplier);
+
+      jasonSheet.addRow([
+        emp.name,
+        empId,
+        entry.work_date,
+        entry.customer_name,
+        hours,
+        rate,
+        total,
+        type,
+        entry.notes || "",
+      ]);
+    }
+
+    // format columns for Jason sheet
+    jasonSheet.columns = [
+      { width: 20 }, // Employee
+      { width: 18 }, // Employee ID
+      { width: 12 }, // Date
+      { width: 25 }, // Client
+      { width: 8 },  // Hours
+      { width: 10 }, // Rate
+      { width: 12 }, // Total
+      { width: 10 }, // Type
+      { width: 30 }, // Notes
+    ];
+    jasonSheet.getColumn(6).numFmt = '"$"#,##0.00';
+    jasonSheet.getColumn(7).numFmt = '"$"#,##0.00';
+
     await workbook.xlsx.writeFile(filepath);
 
     files.push({
@@ -194,6 +264,11 @@ export async function generateWeeklyExports({ db, weekStart }) {
     totals.totalRegular += empRegularHours;
     totals.totalOT += empOTHours;
     totals.totalAmount += empTotalAmount;
+    if (category === 'admin') {
+      totals.adminAmount += empTotalAmount;
+    } else {
+      totals.hourlyAmount += empTotalAmount;
+    }
   }
 
   // Round final totals
@@ -201,6 +276,8 @@ export async function generateWeeklyExports({ db, weekStart }) {
   totals.totalRegular = round2(totals.totalRegular);
   totals.totalOT = round2(totals.totalOT);
   totals.totalAmount = round2(totals.totalAmount);
+  totals.adminAmount = round2(totals.adminAmount || 0);
+  totals.hourlyAmount = round2(totals.hourlyAmount || 0);
 
   console.log(`[generateWeekly] Week ${weekStart}: ${files.length} employee files generated`);
   console.log(`[generateWeekly] Totals: ${totals.totalHours}hrs (${totals.totalRegular} reg + ${totals.totalOT} OT) = $${totals.totalAmount}`);

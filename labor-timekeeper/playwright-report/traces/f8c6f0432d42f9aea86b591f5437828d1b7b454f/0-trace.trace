@@ -1,0 +1,25 @@
+{"version":8,"type":"context-options","origin":"library","browserName":"","playwrightVersion":"1.57.0","options":{},"platform":"win32","wallTime":1768397937086,"monotonicTime":129309.626,"sdkLanguage":"javascript","contextId":"request-context@bf67e549ce727f2661e4b9ca294389cf","title":"labor-timekeeper.spec.cjs:107 › Labor Timekeeper - API Endpoints (No Auth) › GET /api/customers returns list with addresses"}
+{"type":"before","callId":"call@232","startTime":129317.116,"class":"APIRequestContext","method":"fetch","params":{"url":"http://localhost:3000/api/customers","method":"GET","timeout":0},"stepId":"pw:api@28","beforeSnapshot":"before@call@232"}
+{"type":"log","callId":"call@232","time":129341.487,"message":"→ GET http://localhost:3000/api/customers"}
+{"type":"log","callId":"call@232","time":129341.531,"message":"  user-agent: Playwright/1.57.0 (x64; windows 10.0) node/22.19"}
+{"type":"log","callId":"call@232","time":129341.546,"message":"  accept: */*"}
+{"type":"log","callId":"call@232","time":129341.552,"message":"  accept-encoding: gzip,deflate,br"}
+{"type":"log","callId":"call@232","time":129364.85,"message":"← 200 OK"}
+{"type":"log","callId":"call@232","time":129364.885,"message":"  cross-origin-opener-policy: same-origin"}
+{"type":"log","callId":"call@232","time":129364.901,"message":"  cross-origin-resource-policy: same-origin"}
+{"type":"log","callId":"call@232","time":129364.909,"message":"  origin-agent-cluster: ?1"}
+{"type":"log","callId":"call@232","time":129364.913,"message":"  referrer-policy: no-referrer"}
+{"type":"log","callId":"call@232","time":129364.918,"message":"  strict-transport-security: max-age=15552000; includeSubDomains"}
+{"type":"log","callId":"call@232","time":129364.922,"message":"  x-content-type-options: nosniff"}
+{"type":"log","callId":"call@232","time":129364.927,"message":"  x-dns-prefetch-control: off"}
+{"type":"log","callId":"call@232","time":129364.933,"message":"  x-download-options: noopen"}
+{"type":"log","callId":"call@232","time":129364.937,"message":"  x-frame-options: SAMEORIGIN"}
+{"type":"log","callId":"call@232","time":129364.941,"message":"  x-permitted-cross-domain-policies: none"}
+{"type":"log","callId":"call@232","time":129364.946,"message":"  x-xss-protection: 0"}
+{"type":"log","callId":"call@232","time":129364.951,"message":"  content-type: application/json; charset=utf-8"}
+{"type":"log","callId":"call@232","time":129364.955,"message":"  content-length: 8797"}
+{"type":"log","callId":"call@232","time":129364.959,"message":"  etag: W/\"225d-Q5AcMB68KvgJIBY/VemJ9ZowNcc\""}
+{"type":"log","callId":"call@232","time":129364.964,"message":"  date: Wed, 14 Jan 2026 13:38:57 GMT"}
+{"type":"log","callId":"call@232","time":129364.969,"message":"  connection: keep-alive"}
+{"type":"log","callId":"call@232","time":129364.974,"message":"  keep-alive: timeout=5"}
+{"type":"after","callId":"call@232","endTime":129365.951,"result":{"response":{"url":"http://localhost:3000/api/customers","status":200,"statusText":"OK","headers":[{"name":"Cross-Origin-Opener-Policy","value":"same-origin"},{"name":"Cross-Origin-Resource-Policy","value":"same-origin"},{"name":"Origin-Agent-Cluster","value":"?1"},{"name":"Referrer-Policy","value":"no-referrer"},{"name":"Strict-Transport-Security","value":"max-age=15552000; includeSubDomains"},{"name":"X-Content-Type-Options","value":"nosniff"},{"name":"X-DNS-Prefetch-Control","value":"off"},{"name":"X-Download-Options","value":"noopen"},{"name":"X-Frame-Options","value":"SAMEORIGIN"},{"name":"X-Permitted-Cross-Domain-Policies","value":"none"},{"name":"X-XSS-Protection","value":"0"},{"name":"Content-Type","value":"application/json; charset=utf-8"},{"name":"Content-Length","value":"8797"},{"name":"ETag","value":"W/\"225d-Q5AcMB68KvgJIBY/VemJ9ZowNcc\""},{"name":"Date","value":"Wed, 14 Jan 2026 13:38:57 GMT"},{"name":"Connection","value":"keep-alive"},{"name":"Keep-Alive","value":"timeout=5"}],"fetchUid":"accb1b455bf3de09a0f6e3eebc79ae68"}},"afterSnapshot":"after@call@232"}
