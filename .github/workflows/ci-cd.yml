@@ -45,6 +45,11 @@ jobs:
           fi
         working-directory: labor-timekeeper
 
+      - name: Seed test data
+        run: |
+          curl -s -X POST http://localhost:3000/api/admin/seed
+        working-directory: labor-timekeeper
+
       - name: Install Playwright browsers
         run: npx playwright install --with-deps
         working-directory: labor-timekeeper
