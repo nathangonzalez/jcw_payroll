@@ -20,6 +20,14 @@ import { loadSecrets } from "./lib/secrets.js";
 import { migrate } from "./lib/migrate.js";
 import { ensureEmployees, getEmployeesDBOrDefault } from "./lib/bootstrap.js";
 
+// Resolve directories relative to this module so the server works
+// even when started from a different current working directory.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const EXPORT_DIR = path.join(__dirname, 'exports');
+const SEED_DIR = path.join(__dirname, 'seed');
+
 // Load secrets from Google Secret Manager in production
 await loadSecrets();
 
@@ -27,6 +35,19 @@ const app = express();
 
 // Ensure persistent DB is restored from Cloud Storage in production
 const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, 'data', 'app.db');
+process.env.DATABASE_PATH = DB_PATH;
+
+if (process.env.NODE_ENV !== 'production') {
+  const sidecars = [DB_PATH, `${DB_PATH}-wal`, `${DB_PATH}-shm`];
+  for (const file of sidecars) {
+    try {
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+    } catch (err) {
+      console.warn('[startup] failed to remove local db file', file, err?.message || err);
+    }
+  }
+}
+
 if (process.env.NODE_ENV === 'production') {
   try {
     await restoreFromCloud(DB_PATH);
@@ -46,23 +67,18 @@ if (process.env.NODE_ENV === 'production') {
   }
 }
 
-// Resolve directories relative to this module so the server works
-// even when started from a different current working directory.
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PUBLIC_DIR = path.join(__dirname, 'public');
-const EXPORT_DIR = path.join(__dirname, 'exports');
-const SEED_DIR = path.join(__dirname, 'seed');
-
 // Ensure DB schema is migrated (adds columns and seeds customers if empty)
 await migrate(db);
 
-// Ensure fallback/default employees are present (DB-first, best-effort)
-try {
-  const res = ensureEmployees(db);
-  if (res && res.ok && res.inserted) console.log('[startup] inserted default employees:', res.inserted);
-  if (res && !res.ok) console.warn('[startup] ensureEmployees failed:', res.error);
-} catch (err) {
-  console.warn('[startup] ensureEmployees threw', err?.message || err);
+// Ensure fallback/default employees are present in production only
+if (process.env.NODE_ENV === 'production') {
+  try {
+    const res = ensureEmployees(db);
+    if (res && res.ok && res.inserted) console.log('[startup] inserted default employees:', res.inserted);
+    if (res && !res.ok) console.warn('[startup] ensureEmployees failed:', res.error);
+  } catch (err) {
+    console.warn('[startup] ensureEmployees threw', err?.message || err);
+  }
 }
 
 app.use(helmet({ contentSecurityPolicy: false })); // allow inline scripts in MVP
@@ -75,6 +91,80 @@ app.use('/exports', express.static(EXPORT_DIR));
 // Use /tmp for uploads in production (App Engine read-only filesystem)
 const uploadDir = process.env.NODE_ENV === 'production' ? '/tmp/uploads' : './data/uploads';
 const upload = multer({ dest: uploadDir });
+
+function readSeedJson(relPath) {
+  const p = path.join(SEED_DIR, relPath);
+  if (!fs.existsSync(p)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf8'));
+  } catch (err) {
+    console.warn('[seed] failed to read', p, err?.message || err);
+    return null;
+  }
+}
+
+function uniqueNamesFromSamples(samples, key) {
+  const set = new Set();
+  for (const entry of samples || []) {
+    const name = String(entry?.[key] || '').trim();
+    if (name) set.add(name);
+  }
+  return [...set];
+}
+
+function ensureSimulationCustomers(sampleEntries) {
+  const count = db.prepare('SELECT COUNT(*) as n FROM customers').get().n || 0;
+  if (count > 0) return;
+  let customers = readSeedJson('customers.json');
+  if (!customers || customers.length === 0) {
+    customers = uniqueNamesFromSamples(sampleEntries, 'customer').map(name => ({ name, address: '' }));
+  }
+  if (!customers || customers.length === 0) return;
+  const now = new Date().toISOString();
+  const insert = db.prepare('INSERT INTO customers (id, name, address, created_at) VALUES (?, ?, ?, ?)');
+  for (const c of customers) {
+    const name = typeof c === 'string' ? c : c.name;
+    const address = typeof c === 'string' ? '' : (c.address || '');
+    if (!name) continue;
+    insert.run(id('cust_'), name, address, now);
+  }
+}
+
+function ensureSimulationEmployees(sampleEntries) {
+  const count = db.prepare('SELECT COUNT(*) as n FROM employees').get().n || 0;
+  if (count > 0) return;
+  let employees = readSeedJson('employees.json');
+  if (!employees || employees.length === 0) {
+    const adminNames = new Set(['chris jacobi', 'chris z', 'chris zavesky']);
+    employees = uniqueNamesFromSamples(sampleEntries, 'employee').map(name => ({
+      name,
+      role: adminNames.has(String(name).toLowerCase()) ? 'admin' : 'hourly',
+      default_bill_rate: 0,
+      default_pay_rate: 0,
+      aliases: []
+    }));
+  }
+  if (!employees || employees.length === 0) return;
+  const now = new Date().toISOString();
+  const insert = db.prepare(`INSERT INTO employees (id, name, default_bill_rate, default_pay_rate, is_admin, aliases_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  for (const e of employees) {
+    const isAdmin = e.is_admin ? 1 : (e.role === 'admin' ? 1 : 0);
+    insert.run(
+      id('emp_'),
+      e.name,
+      Number(e.default_bill_rate || 0),
+      Number(e.default_pay_rate || 0),
+      isAdmin,
+      JSON.stringify(e.aliases || []),
+      now
+    );
+  }
+}
+
+function ensureSimulationSeedData(sampleEntries) {
+  ensureSimulationCustomers(sampleEntries);
+  ensureSimulationEmployees(sampleEntries);
+}
 
 /** Health */
 app.get("/api/health", (req, res) => {
@@ -835,6 +925,8 @@ app.post('/api/admin/simulate-week', (req, res) => {
       { employee: 'Jafid Osorio', customer: 'McGill', hours: 8, dayOffset: 4 }
     ];
 
+    ensureSimulationSeedData(SAMPLE_ENTRIES);
+
     // Find employees and customers (include aliases and role for matching)
     const employees = db.prepare('SELECT id, name, aliases_json, role FROM employees').all();
     const customers = db.prepare('SELECT id, name FROM customers').all();
@@ -936,6 +1028,8 @@ app.post('/api/admin/simulate-employee', (req, res) => {
     const { employee_id, week_start, reset = false, submit = false } = req.body || {};
     if (!employee_id) return res.status(400).json({ error: 'employee_id required' });
     if (!week_start || !/^\d{4}-\d{2}-\d{2}$/.test(week_start)) return res.status(400).json({ error: 'week_start=YYYY-MM-DD required' });
+
+    ensureSimulationSeedData([]);
 
     const emp = db.prepare('SELECT id, name, role FROM employees WHERE id = ?').get(employee_id);
     if (!emp) return res.status(404).json({ error: 'employee not found' });
@@ -1156,6 +1250,8 @@ app.post('/api/admin/simulate-month', (req, res) => {
         { employee: 'Doug Kinsey', customer: 'McGill', hours: 10, dayOffset: 3 },
         { employee: 'Doug Kinsey', customer: 'Hall', hours: 8, dayOffset: 4 }
       ];
+
+      ensureSimulationSeedData(SAMPLE_ENTRIES);
 
       // load employees/customers maps
       const employees = db.prepare('SELECT id, name, aliases_json, role FROM employees').all();
