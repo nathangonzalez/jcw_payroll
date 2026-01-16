@@ -1,0 +1,6 @@
+#!/bin/sh
+. "$(dirname "$0")/_/husky.sh"
+
+# Run tests before pushing. This runs the labor-timekeeper tests.
+cd labor-timekeeper || exit 1
+npm test
