@@ -57,6 +57,14 @@ export async function generateWeeklyExports({ db, weekStart }) {
     byEmployee.get(row.employee_id).entries.push(row);
   }
 
+  // Ensure all employees exist in the map (create empty entries for those with no approved rows)
+  const allEmployees = db.prepare('SELECT id, name FROM employees ORDER BY name ASC').all();
+  for (const e of allEmployees) {
+    if (!byEmployee.has(e.id)) {
+      byEmployee.set(e.id, { id: e.id, name: e.name, entries: [] });
+    }
+  }
+
   const files = [];
   const totals = {
     employees: 0,
@@ -74,14 +82,20 @@ export async function generateWeeklyExports({ db, weekStart }) {
     const workbook = new ExcelJS.Workbook();
     const ws = workbook.addWorksheet("Weekly Timesheet");
 
-    // Header row
-    ws.addRow(["Date", "Client", "Hours", "Type", "Rate", "Total"]);
+    // Header row (match monthly per-employee format)
+    ws.columns = [
+      { header: 'Date', key: 'date', width: 12 },
+      { header: 'Customer', key: 'cust', width: 25 },
+      { header: 'Hours', key: 'hours', width: 8 },
+      { header: 'Type', key: 'type', width: 10 },
+      { header: 'Rate', key: 'rate', width: 10 },
+      { header: 'Total', key: 'total', width: 12 },
+      { header: 'Notes', key: 'notes', width: 30 }
+    ];
     ws.getRow(1).font = { bold: true };
-    ws.getRow(1).fill = {
-      type: "pattern",
-      pattern: "solid",
-      fgColor: { argb: "FFE0E0E0" },
-    };
+    ws.getRow(1).eachCell((cell) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
+    });
 
     // Build entries with rate lookup and type assignment
     const enrichedEntries = emp.entries.map((e) => {
@@ -128,6 +142,7 @@ export async function generateWeeklyExports({ db, weekStart }) {
         type,
         rate,
         total,
+        entry.notes || ''
       ]);
 
       empTotalHours += hours;
@@ -141,23 +156,12 @@ export async function generateWeeklyExports({ db, weekStart }) {
 
     // Add subtotal row
     ws.addRow([]);
-    const subtotalRow = ws.addRow([
-      "SUBTOTAL",
-      "",
-      round2(empTotalHours),
-      `Reg: ${round2(empRegularHours)} / OT: ${round2(empOTHours)}`,
-      "",
-      round2(empTotalAmount),
-    ]);
+    const subtotalRow = ws.addRow(["", "SUBTOTAL", round2(empTotalHours), `Reg: ${round2(empRegularHours)} / OT: ${round2(empOTHours)}`, "", round2(empTotalAmount), ""]);
     subtotalRow.font = { bold: true };
-    subtotalRow.fill = {
-      type: "pattern",
-      pattern: "solid",
-      fgColor: { argb: "FFFFE0B0" },
-    };
+    subtotalRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF2CC' } };
 
     // Category info row
-    ws.addRow([`Category: ${category.toUpperCase()}`, "", "", "", "", ""]);
+    ws.addRow([`Category: ${category.toUpperCase()}`, "", "", "", "", "", ""]);
 
     // Per-employee hourly/admin subtotals and grand total
     const empHourlyAmount = category === 'admin' ? 0 : round2(empTotalAmount);
@@ -165,9 +169,9 @@ export async function generateWeeklyExports({ db, weekStart }) {
     const empGrandTotal = round2(empHourlyAmount + empAdminAmount);
 
     ws.addRow([]);
-    const hourlyRow = ws.addRow(["HOURLY SUBTOTAL", "", "", "", "", empHourlyAmount]);
-    const adminRow = ws.addRow(["ADMIN SUBTOTAL", "", "", "", "", empAdminAmount]);
-    const grandRow = ws.addRow(["GRAND TOTAL", "", "", "", "", empGrandTotal]);
+    const hourlyRow = ws.addRow(["", "HOURLY SUBTOTAL", "", "", "", empHourlyAmount, ""]);
+    const adminRow = ws.addRow(["", "ADMIN SUBTOTAL", "", "", "", empAdminAmount, ""]);
+    const grandRow = ws.addRow(["", "GRAND TOTAL", "", "", "", empGrandTotal, ""]);
     hourlyRow.font = { bold: true };
     adminRow.font = { bold: true };
     grandRow.font = { bold: true, color: { argb: 'FF0000' } };
@@ -181,22 +185,12 @@ export async function generateWeeklyExports({ db, weekStart }) {
       pattern: "solid",
       fgColor: { argb: "FFE8F8E0" },
     };
-    // Ensure currency formatting for the totals column
-    ws.getColumn(6).numFmt = '"$"#,##0.00';
+    // Ensure currency formatting for the totals and rate columns
+    ws.getColumn('rate').numFmt = '"$"#,##0.00';
+    ws.getColumn('total').numFmt = '"$"#,##0.00';
 
-    // Format columns
-    ws.columns = [
-      { width: 12 },  // Date
-      { width: 25 },  // Client
-      { width: 8 },   // Hours
-      { width: 10 },  // Type
-      { width: 8 },   // Rate
-      { width: 12 },  // Total
-    ];
-
-    // Format currency columns
-    ws.getColumn(5).numFmt = '"$"#,##0.00';
-    ws.getColumn(6).numFmt = '"$"#,##0.00';
+    // Apply formatting helper to match repo style
+    try { formatSheet(ws); } catch (e) {}
 
     // Save file
     const safeName = emp.name.replace(/[^a-zA-Z0-9]/g, "_");
@@ -245,6 +239,7 @@ export async function generateWeeklyExports({ db, weekStart }) {
     jasonSheet.getColumn(6).numFmt = '"$"#,##0.00';
     jasonSheet.getColumn(7).numFmt = '"$"#,##0.00';
 
+    try { formatSheet(jasonSheet); } catch (e) {}
     await workbook.xlsx.writeFile(filepath);
 
     files.push({
@@ -301,4 +296,35 @@ function ensureDir(dir) {
 
 function round2(n) {
   return Math.round(Number(n) * 100) / 100;
+}
+
+function formatSheet(ws) {
+  try { ws.views = [{ state: 'frozen', ySplit: 1 }]; } catch (e) {}
+  const header = ws.getRow(1);
+  header.eachCell((cell) => {
+    cell.font = Object.assign({}, cell.font, { bold: true });
+    if (!cell.fill) cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
+    cell.alignment = Object.assign({}, cell.alignment, { vertical: 'middle', horizontal: 'center' });
+    cell.border = Object.assign({}, cell.border, { bottom: { style: 'thin' } });
+  });
+
+  const colMax = [];
+  ws.eachRow((row, rowNumber) => {
+    row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+      const val = cell.value;
+      let s = '';
+      if (val == null) s = '';
+      else if (typeof val === 'object' && val.text) s = String(val.text);
+      else s = String(val);
+      colMax[colNumber] = Math.max(colMax[colNumber] || 0, s.length);
+      if (rowNumber > 1) {
+        cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+      }
+      if (typeof cell.value === 'number') cell.alignment = { horizontal: 'right' };
+    });
+  });
+  ws.columns.forEach((col, idx) => {
+    const max = colMax[idx+1] || 10;
+    col.width = Math.min(50, Math.max(12, Math.ceil(max + 2)));
+  });
 }

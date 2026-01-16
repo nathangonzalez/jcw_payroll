@@ -1,5 +1,5 @@
 import { addDays, startOfWeek, format } from "date-fns";
-import { utcToZonedTime, formatInTimeZone } from "date-fns-tz";
+import { toZonedTime, formatInTimeZone } from "date-fns-tz";
 
 export const TZ = process.env.TIMEZONE || "America/New_York";
 
@@ -11,7 +11,7 @@ export function todayYMD() {
 export function weekStartYMD(date = new Date()) {
   const weekStartsOn = Number(process.env.PAYROLL_WEEK_START ?? 1); // Monday default
   // Use zoned time for consistent payroll weeks
-  const zoned = utcToZonedTime(date, TZ);
+  const zoned = toZonedTime(date, TZ);
   const start = startOfWeek(zoned, { weekStartsOn });
   return format(start, "yyyy-MM-dd");
 }
@@ -20,7 +20,7 @@ export function weekDates(weekStart) {
   // weekStart is YYYY-MM-DD
   const [y,m,d] = weekStart.split("-").map(Number);
   const start = new Date(Date.UTC(y, m-1, d, 12, 0, 0)); // noon UTC avoids DST edge
-  const zonedStart = utcToZonedTime(start, TZ);
+  const zonedStart = toZonedTime(start, TZ);
   const map = {};
   const keys = ["sun","mon","tue","wed","thu","fri","sat"];
   // Determine actual weekday order relative to configured start
