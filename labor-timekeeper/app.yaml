@@ -15,6 +15,7 @@ env_variables:
   SMTP_HOST: "smtp.office365.com"
   SMTP_PORT: "587"
   EMAIL_TO: "nathan@jcwelton.com"
+  HUSKY: "0"
 
 # Secrets from Google Secret Manager
 # Create secrets first:
