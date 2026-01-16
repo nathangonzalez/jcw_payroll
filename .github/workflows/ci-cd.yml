@@ -72,7 +72,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Authenticate to GCP
+      - name: Write GCP key from base64 secret
+        run: |
+          if [ -n "${{ secrets.GCP_SA_KEY_B64 }}" ]; then
+            echo "${{ secrets.GCP_SA_KEY_B64 }}" | tr -d '\r' | base64 --decode > gcloud-key.json
+          fi
+
+      - name: Authenticate to GCP (from file)
+        if: ${{ secrets.GCP_SA_KEY_B64 != '' }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_file: gcloud-key.json
+
+      - name: Authenticate to GCP (from secret)
+        if: ${{ secrets.GCP_SA_KEY_B64 == '' }}
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
