@@ -71,25 +71,11 @@ jobs:
     env:
       GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
       GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-      GCP_SA_KEY_B64: ${{ secrets.GCP_SA_KEY_B64 }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Write GCP key from base64 secret
-        run: |
-          if [ -n "$GCP_SA_KEY_B64" ]; then
-            printf '%s' "$GCP_SA_KEY_B64" | tr -d '\r' | base64 --decode > gcloud-key.json
-          fi
-
-      - name: Authenticate to GCP (from file)
-        if: ${{ env.GCP_SA_KEY_B64 != '' }}
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_file: gcloud-key.json
-
       - name: Authenticate to GCP (from secret)
-        if: ${{ env.GCP_SA_KEY_B64 == '' }}
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ env.GCP_SA_KEY }}
