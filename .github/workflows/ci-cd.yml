@@ -88,4 +88,17 @@ jobs:
         run: gcloud auth activate-service-account --key-file=gcloud-key.json
 
       - name: Deploy App Engine service
-        run: gcloud app deploy labor-timekeeper/app.yaml --quiet --promote
+        run: |
+          attempt=1
+          max=3
+          while [ $attempt -le $max ]; do
+            if gcloud app deploy labor-timekeeper/app.yaml --quiet --promote; then
+              exit 0
+            fi
+            if [ $attempt -eq $max ]; then
+              exit 1
+            fi
+            echo "Deploy failed; retrying in 15s (attempt $attempt/$max)..." >&2
+            sleep 15
+            attempt=$((attempt + 1))
+          done
