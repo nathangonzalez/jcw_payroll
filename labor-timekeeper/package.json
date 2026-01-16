@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "node --watch server.js",
     "start": "node server.js",
-    "prepare": "husky install",
+    "prepare": "node -e \"if (process.env.HUSKY === '0' || process.env.NODE_ENV === 'production') process.exit(0); require('husky').install();\"",
     "seed": "node scripts/seed.js",
     "simulate": "node scripts/simulate.js",
     "export:monthly": "node scripts/export_monthly.js",
