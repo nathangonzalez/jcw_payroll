@@ -1,6 +1,6 @@
 const { test, expect } = require("@playwright/test");
 
-const BASE = "http://localhost:3000";
+const BASE = process.env.BASE_URL || "http://localhost:3000";
 
 test.describe("Labor Timekeeper - No Auth Flow", () => {
   test("home page shows app (employee selector)", async ({ page }) => {
@@ -86,7 +86,8 @@ test.describe("Labor Timekeeper - Time Entry", () => {
 
 test.describe("Labor Timekeeper - Admin Page", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto(BASE + "/admin");
+    await page.goto(BASE + "/admin?admin_secret=7707");
+    await page.waitForSelector("#pinInput", { state: "visible" });
     // Enter PIN to unlock admin page
     await page.fill("#pinInput", "7707");
     await page.click("#pinBtn");
