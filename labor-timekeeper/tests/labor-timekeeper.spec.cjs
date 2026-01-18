@@ -86,7 +86,12 @@ test.describe("Labor Timekeeper - Time Entry", () => {
 
 test.describe("Labor Timekeeper - Admin Page", () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto(BASE + "/admin?admin_secret=7707");
+    await page.goto(BASE + "/admin");
+    const secretInput = page.locator("#secretInput");
+    if (await secretInput.count()) {
+      await secretInput.fill("7707");
+      await page.click("#secretBtn");
+    }
     await page.waitForSelector("#pinInput", { state: "visible" });
     // Enter PIN to unlock admin page
     await page.fill("#pinInput", "7707");
@@ -99,6 +104,7 @@ test.describe("Labor Timekeeper - Admin Page", () => {
   });
 
   test("admin page shows pipeline buttons", async ({ page }) => {
+    await page.click("#toggleDevBtn");
     await expect(page.locator("#genWeekBtn")).toBeVisible();
     await expect(page.locator("#genMonthBtn")).toBeVisible();
   });
