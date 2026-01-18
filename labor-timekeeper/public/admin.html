@@ -7,8 +7,19 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
+  <!-- Admin Secret Gate -->
+  <div id="secretGate" class="container" style="margin-top:50px;">
+    <div class="card" style="max-width:320px; margin:0 auto; text-align:center;">
+      <h2>Admin Secret</h2>
+      <p class="muted small">Enter admin secret to continue</p>
+      <input id="secretInput" type="password" placeholder="********" style="font-size:1.1rem; text-align:center; letter-spacing:3px; padding:12px;" />
+      <button id="secretBtn" class="primary" style="margin-top:12px; width:100%;">Unlock</button>
+      <p id="secretError" class="small" style="color:#e74c3c; margin-top:8px; display:none;">Incorrect admin secret</p>
+    </div>
+  </div>
+
   <!-- PIN Gate -->
-  <div id="pinGate" class="container" style="margin-top:50px;">
+  <div id="pinGate" class="container" style="margin-top:50px; display:none;">
     <div class="card" style="max-width:300px; margin:0 auto; text-align:center;">
       <h2>🔒 Admin Access</h2>
       <p class="muted small">Enter PIN to continue</p>
@@ -94,12 +105,48 @@
 
 <script>
 const ADMIN_PIN = '7707';
-const ADMIN_SECRET = new URLSearchParams(location.search).get('admin_secret') || '';
+const SECRET_KEY = 'labor_timekeeper_admin_secret';
+let ADMIN_SECRET = '';
 const IS_PROD_HOST = location.hostname.endsWith('appspot.com');
 const FORCE_DEV = new URLSearchParams(location.search).get('dev') === '1';
 const PIN_KEY = 'labor_timekeeper_admin_auth';
 
 function el(id){ return document.getElementById(id); }
+
+// Admin Secret Gate Logic
+async function verifySecret() {
+  const input = el('secretInput').value;
+  if (!input) return;
+  const r = await fetch('/api/admin/schema', {
+    headers: { 'x-admin-secret': input }
+  });
+  if (r.ok) {
+    ADMIN_SECRET = input;
+    sessionStorage.setItem(SECRET_KEY, input);
+    el('secretGate').style.display = 'none';
+    el('pinGate').style.display = 'block';
+    el('pinInput').focus();
+  } else {
+    el('secretError').style.display = 'block';
+    el('secretInput').value = '';
+    el('secretInput').focus();
+  }
+}
+
+function initSecretGate() {
+  const saved = sessionStorage.getItem(SECRET_KEY);
+  if (saved) ADMIN_SECRET = saved;
+  if (ADMIN_SECRET) {
+    el('secretInput').value = ADMIN_SECRET;
+    verifySecret();
+    return;
+  }
+  el('secretGate').style.display = 'block';
+  el('pinGate').style.display = 'none';
+  el('secretBtn').onclick = verifySecret;
+  el('secretInput').onkeydown = (e) => { if (e.key === 'Enter') verifySecret(); };
+  el('secretInput').focus();
+}
 
 // PIN Gate Logic
 function checkPin() {
@@ -113,6 +160,7 @@ function checkPin() {
 
 function showAdmin() {
   el('pinGate').style.display = 'none';
+  el('secretGate').style.display = 'none';
   el('adminContent').style.display = 'block';
   init();
 }
@@ -133,7 +181,8 @@ function verifyPin() {
 el('pinBtn').onclick = verifyPin;
 el('pinInput').onkeydown = (e) => { if (e.key === 'Enter') verifyPin(); };
 
-// Check if already authenticated
+// Init secret gate + then PIN gate
+initSecretGate();
 if (!checkPin()) {
   // PIN gate remains until verified
 }
