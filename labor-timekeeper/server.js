@@ -1112,7 +1112,7 @@ app.get('/api/admin/dump-employees', (req, res) => {
 
 // Admin: upsert rate overrides by employee/customer name
 // POST /api/admin/upsert-rates { rates: [{ customer, employee, bill_rate }] }
-app.post('/api/admin/upsert-rates', (req, res) => {
+app.post('/api/admin/upsert-rates', async (req, res) => {
   try {
     const adminSecret = process.env.ADMIN_SECRET;
     const provided = req.headers['x-admin-secret'] || req.body?.admin_secret;
@@ -1173,6 +1173,14 @@ app.post('/api/admin/upsert-rates', (req, res) => {
     });
     tx();
 
+    if (process.env.NODE_ENV === 'production') {
+      try {
+        await backupToCloud(DB_PATH);
+      } catch (err) {
+        console.warn('[admin/upsert-rates] backupToCloud failed', err?.message || err);
+      }
+    }
+
     res.json({ ok: true, updated, missing });
   } catch (err) {
     console.error('[admin/upsert-rates]', err);
@@ -1182,7 +1190,7 @@ app.post('/api/admin/upsert-rates', (req, res) => {
 
 // Admin: upsert default bill/pay rates by employee name
 // POST /api/admin/upsert-employee-rates { rates: [{ employee, bill_rate, pay_rate? }] }
-app.post('/api/admin/upsert-employee-rates', (req, res) => {
+app.post('/api/admin/upsert-employee-rates', async (req, res) => {
   try {
     const adminSecret = process.env.ADMIN_SECRET;
     const provided = req.headers['x-admin-secret'] || req.body?.admin_secret;
@@ -1237,6 +1245,14 @@ app.post('/api/admin/upsert-employee-rates', (req, res) => {
       }
     });
     tx();
+
+    if (process.env.NODE_ENV === 'production') {
+      try {
+        await backupToCloud(DB_PATH);
+      } catch (err) {
+        console.warn('[admin/upsert-employee-rates] backupToCloud failed', err?.message || err);
+      }
+    }
 
     res.json({ ok: true, updated, missing });
   } catch (err) {
@@ -1356,7 +1372,7 @@ app.post('/api/admin/seed-weeks', (req, res) => {
 /** Admin: Simulate a full month by seeding each week of the month
  * POST /api/admin/simulate-month { month: 'YYYY-MM', reset?: bool, submit?: bool, approve?: bool }
  */
-app.post('/api/admin/simulate-month', (req, res) => {
+app.post('/api/admin/simulate-month', async (req, res) => {
   try {
     const adminSecret = process.env.ADMIN_SECRET;
     const provided = req.headers['x-admin-secret'] || req.body?.admin_secret;
@@ -1450,6 +1466,14 @@ app.post('/api/admin/simulate-month', (req, res) => {
       });
       tx();
       results[wk] = { created, skipped, deleted };
+    }
+
+    if (process.env.NODE_ENV === 'production') {
+      try {
+        await backupToCloud(DB_PATH);
+      } catch (err) {
+        console.warn('[admin/simulate-month] backupToCloud failed', err?.message || err);
+      }
     }
 
     res.json({ ok: true, month, seeded: results });
