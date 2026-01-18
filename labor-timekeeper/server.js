@@ -1110,6 +1110,160 @@ app.get('/api/admin/dump-employees', (req, res) => {
   }
 });
 
+// Admin: upsert rate overrides by employee/customer name
+// POST /api/admin/upsert-rates { rates: [{ customer, employee, bill_rate }] }
+app.post('/api/admin/upsert-rates', (req, res) => {
+  try {
+    const adminSecret = process.env.ADMIN_SECRET;
+    const provided = req.headers['x-admin-secret'] || req.body?.admin_secret;
+    if (adminSecret && provided !== adminSecret) return res.status(403).json({ error: 'admin secret required' });
+
+    const rates = req.body?.rates;
+    if (!Array.isArray(rates) || rates.length === 0) {
+      return res.status(400).json({ error: 'rates[] required' });
+    }
+
+    const employees = db.prepare('SELECT id, name, aliases_json FROM employees').all();
+    const customers = db.prepare('SELECT id, name FROM customers').all();
+    const empMap = new Map();
+    for (const e of employees) {
+      empMap.set(e.name.toLowerCase(), e);
+      try {
+        const aliases = e.aliases_json ? JSON.parse(e.aliases_json) : [];
+        for (const a of aliases || []) empMap.set(String(a).toLowerCase(), e);
+      } catch {}
+    }
+    const custMap = new Map(customers.map(c => [c.name.toLowerCase(), c]));
+
+    const normalizeEmp = name => {
+      const raw = String(name || '').trim();
+      if (!raw) return '';
+      return raw.split(' - ')[0].trim().toLowerCase();
+    };
+    const normalizeCust = name => String(name || '').trim().toLowerCase();
+
+    const upsert = db.prepare(`
+      INSERT INTO rate_overrides (id, employee_id, customer_id, bill_rate, created_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(employee_id, customer_id) DO UPDATE SET bill_rate=excluded.bill_rate
+    `);
+    const now = new Date().toISOString();
+    let updated = 0;
+    const missing = [];
+
+    const tx = db.transaction(() => {
+      for (const r of rates) {
+        const empKey = normalizeEmp(r.employee);
+        const custKey = normalizeCust(r.customer);
+        if (!empKey || !custKey) {
+          missing.push({ employee: r.employee, customer: r.customer, reason: 'missing name' });
+          continue;
+        }
+        let emp = empMap.get(empKey);
+        if (!emp) emp = employees.find(e => e.name.toLowerCase().includes(empKey));
+        let cust = custMap.get(custKey);
+        if (!cust) cust = customers.find(c => c.name.toLowerCase().includes(custKey));
+        if (!emp || !cust) {
+          missing.push({ employee: r.employee, customer: r.customer, reason: 'no match' });
+          continue;
+        }
+        upsert.run(id('ro_'), emp.id, cust.id, Number(r.bill_rate || 0), now);
+        updated++;
+      }
+    });
+    tx();
+
+    res.json({ ok: true, updated, missing });
+  } catch (err) {
+    console.error('[admin/upsert-rates]', err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+// Admin: upsert default bill/pay rates by employee name
+// POST /api/admin/upsert-employee-rates { rates: [{ employee, bill_rate, pay_rate? }] }
+app.post('/api/admin/upsert-employee-rates', (req, res) => {
+  try {
+    const adminSecret = process.env.ADMIN_SECRET;
+    const provided = req.headers['x-admin-secret'] || req.body?.admin_secret;
+    if (adminSecret && provided !== adminSecret) return res.status(403).json({ error: 'admin secret required' });
+
+    const rates = req.body?.rates;
+    if (!Array.isArray(rates) || rates.length === 0) {
+      return res.status(400).json({ error: 'rates[] required' });
+    }
+
+    const employees = db.prepare('SELECT id, name, aliases_json FROM employees').all();
+    const empMap = new Map();
+    for (const e of employees) {
+      empMap.set(e.name.toLowerCase(), e);
+      try {
+        const aliases = e.aliases_json ? JSON.parse(e.aliases_json) : [];
+        for (const a of aliases || []) empMap.set(String(a).toLowerCase(), e);
+      } catch {}
+    }
+
+    const normalizeEmp = name => {
+      const raw = String(name || '').trim();
+      if (!raw) return '';
+      return raw.split(' - ')[0].trim().toLowerCase();
+    };
+
+    const update = db.prepare(`
+      UPDATE employees
+      SET default_bill_rate = ?, default_pay_rate = ?
+      WHERE id = ?
+    `);
+
+    let updated = 0;
+    const missing = [];
+    const tx = db.transaction(() => {
+      for (const r of rates) {
+        const empKey = normalizeEmp(r.employee);
+        if (!empKey) {
+          missing.push({ employee: r.employee, reason: 'missing name' });
+          continue;
+        }
+        let emp = empMap.get(empKey);
+        if (!emp) emp = employees.find(e => e.name.toLowerCase().includes(empKey));
+        if (!emp) {
+          missing.push({ employee: r.employee, reason: 'no match' });
+          continue;
+        }
+        const bill = Number(r.bill_rate || 0);
+        const pay = Number(r.pay_rate || 0);
+        update.run(bill, pay, emp.id);
+        updated++;
+      }
+    });
+    tx();
+
+    res.json({ ok: true, updated, missing });
+  } catch (err) {
+    console.error('[admin/upsert-employee-rates]', err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+// Admin: expose basic schema info for verification
+app.get('/api/admin/schema', (req, res) => {
+  try {
+    const adminSecret = process.env.ADMIN_SECRET;
+    const provided = req.headers['x-admin-secret'] || req.query?.admin_secret;
+    if (adminSecret && provided !== adminSecret) return res.status(403).json({ error: 'admin secret required' });
+
+    const tables = ['employees', 'customers', 'rate_overrides', 'time_entries'];
+    const schema = {};
+    for (const t of tables) {
+      schema[t] = db.prepare(`PRAGMA table_info(${t})`).all();
+    }
+    res.json({ ok: true, schema });
+  } catch (err) {
+    console.error('[admin/schema]', err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
 /** Admin: Seed previous sample weeks for UAT (leaves current week empty)
  * POST /api/admin/seed-weeks
  * Response: { ok: true, seeded: { '<week>': { created, skipped, deleted } } }
