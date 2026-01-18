@@ -1301,21 +1301,54 @@ app.post('/api/admin/seed-weeks', (req, res) => {
     for (const wk of weeks) {
       // Reuse simulate-week logic by performing inserts similar to the endpoint
       const SAMPLE_ENTRIES = [
-        { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 0 },
-        { employee: 'Chris Jacobi', customer: 'Hall', hours: 8, dayOffset: 1 },
+        // Admin (no OT) - spread across JCW/Shop + client work
+        { employee: 'Chris Jacobi', customer: 'JCW', hours: 8, dayOffset: 0 },
+        { employee: 'Chris Jacobi', customer: 'Shop', hours: 8, dayOffset: 1 },
         { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 2 },
-        { employee: 'Chris Jacobi', customer: 'Bryan', hours: 10, dayOffset: 3 },
-        { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 4 },
-        { employee: 'Chris Z', customer: 'Hall', hours: 9, dayOffset: 0 },
-        { employee: 'Chris Z', customer: 'Bryan', hours: 8, dayOffset: 1 },
-        { employee: 'Chris Z', customer: 'McGill', hours: 7, dayOffset: 2 },
+        { employee: 'Chris Jacobi', customer: 'Hall', hours: 8, dayOffset: 3 },
+        { employee: 'Chris Jacobi', customer: 'Howard', hours: 6, dayOffset: 4 },
+        { employee: 'Chris Z', customer: 'JCW', hours: 8, dayOffset: 0 },
+        { employee: 'Chris Z', customer: 'Shop', hours: 8, dayOffset: 1 },
+        { employee: 'Chris Z', customer: 'Richer', hours: 8, dayOffset: 2 },
         { employee: 'Chris Z', customer: 'Hall', hours: 8, dayOffset: 3 },
-        { employee: 'Chris Z', customer: 'Bryan', hours: 10, dayOffset: 4 },
+        { employee: 'Chris Z', customer: 'Howard', hours: 6, dayOffset: 4 },
+
+        // Hourly (OT/regular/PTO mix)
         { employee: 'Doug Kinsey', customer: 'McGill', hours: 10, dayOffset: 0 },
         { employee: 'Doug Kinsey', customer: 'Hall', hours: 10, dayOffset: 1 },
-        { employee: 'Doug Kinsey', customer: 'Bryan', hours: 10, dayOffset: 2 },
-        { employee: 'Doug Kinsey', customer: 'McGill', hours: 10, dayOffset: 3 },
-        { employee: 'Doug Kinsey', customer: 'Hall', hours: 8, dayOffset: 4 }
+        { employee: 'Doug Kinsey', customer: 'Howard', hours: 10, dayOffset: 2 },
+        { employee: 'Doug Kinsey', customer: 'Landy', hours: 10, dayOffset: 3 },
+        { employee: 'Doug Kinsey', customer: 'Shop', hours: 10, dayOffset: 4 },
+
+        { employee: 'Jason Green', customer: 'Hall', hours: 9, dayOffset: 0 },
+        { employee: 'Jason Green', customer: 'Howard', hours: 9, dayOffset: 1 },
+        { employee: 'Jason Green', customer: 'Lucas', hours: 9, dayOffset: 2 },
+        { employee: 'Jason Green', customer: 'Richer', hours: 9, dayOffset: 3 },
+        { employee: 'Jason Green', customer: 'Watkins', hours: 9, dayOffset: 4 },
+
+        { employee: 'Boban Abbate', customer: 'Boyle', hours: 8, dayOffset: 0 },
+        { employee: 'Boban Abbate', customer: 'Campbell', hours: 8, dayOffset: 1 },
+        { employee: 'Boban Abbate', customer: 'Howard', hours: 8, dayOffset: 2 },
+        { employee: 'Boban Abbate', customer: 'JCW', hours: 8, dayOffset: 3 },
+        { employee: 'Boban Abbate', customer: 'Shop', hours: 8, dayOffset: 4 },
+
+        { employee: 'Sean Matthew', customer: 'Landy', hours: 8, dayOffset: 0 },
+        { employee: 'Sean Matthew', customer: 'Watkins', hours: 8, dayOffset: 1 },
+        { employee: 'Sean Matthew', customer: 'Boyle', hours: 8, dayOffset: 2 },
+        { employee: 'Sean Matthew', customer: 'JCW', hours: 8, dayOffset: 3 },
+        { employee: 'Sean Matthew', customer: 'JCW', hours: 8, dayOffset: 4, notes: 'PTO' },
+
+        { employee: 'Phil Henderson', customer: 'Watkins', hours: 8, dayOffset: 0 },
+        { employee: 'Phil Henderson', customer: 'Shop', hours: 8, dayOffset: 1 },
+        { employee: 'Phil Henderson', customer: 'JCW', hours: 8, dayOffset: 2 },
+        { employee: 'Phil Henderson', customer: 'Hall', hours: 8, dayOffset: 3 },
+        { employee: 'Phil Henderson', customer: 'JCW', hours: 8, dayOffset: 4, notes: 'PTO' },
+
+        { employee: 'Thomas Brinson', customer: 'Landy', hours: 9, dayOffset: 0 },
+        { employee: 'Thomas Brinson', customer: 'Landy', hours: 9, dayOffset: 1 },
+        { employee: 'Thomas Brinson', customer: 'Watkins', hours: 9, dayOffset: 2 },
+        { employee: 'Thomas Brinson', customer: 'Hall', hours: 9, dayOffset: 3 },
+        { employee: 'Thomas Brinson', customer: 'JCW', hours: 9, dayOffset: 4 }
       ];
 
       // load employees/customers maps
@@ -1449,7 +1482,7 @@ app.post('/api/admin/simulate-month', async (req, res) => {
           if (!cust) cust = customers.find(c => c.name.toLowerCase().includes(custKey));
           if (!emp || !cust) { skipped++; continue; }
           const empNameLower = (emp.name || '').toLowerCase();
-          if ((emp.role && emp.role === 'admin') || empNameLower.includes('jafid')) { skipped++; continue; }
+          if (empNameLower.includes('jafid')) { skipped++; continue; }
 
           const [yy,mm,dd] = wk.split('-').map(Number);
           const workDate = new Date(yy, mm-1, dd + entry.dayOffset);
@@ -1459,8 +1492,9 @@ app.post('/api/admin/simulate-month', async (req, res) => {
           if (exists) { skipped++; continue; }
 
           const status = approve ? 'APPROVED' : (submit ? 'SUBMITTED' : 'DRAFT');
+          const notes = entry.notes ? `Seeded sample hours - ${entry.notes}` : 'Seeded sample hours';
           db.prepare(`INSERT INTO time_entries (id, employee_id, customer_id, work_date, hours, notes, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-            .run(id('te_'), emp.id, cust.id, workDateYmd, Number(entry.hours), '', status, nowTs, nowTs);
+            .run(id('te_'), emp.id, cust.id, workDateYmd, Number(entry.hours), notes, status, nowTs, nowTs);
           created++;
         }
       });

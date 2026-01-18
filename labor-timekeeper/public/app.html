@@ -54,6 +54,7 @@
         <div class="col"><button class="primary" id="saveBtn">Save / Update</button></div>
         <div class="col"><button id="submitBtn">Submit Week</button></div>
       </div>
+      <div id="submitStatus" class="small muted" style="margin-top:6px; display:none;"></div>
       <!-- seed UI removed from employee view (admin-only in /admin) -->
       <div class="small muted" style="margin-top:6px;">Saving will update an existing entry for the same day and client (if present).</div>
 
@@ -443,7 +444,12 @@ async function submitWeek(){
     headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ employee_id: EMPLOYEE.id, week_start: WEEK.week_start })
   });
-  alert('Submitted!');
+  const status = el('submitStatus');
+  if (status) {
+    status.textContent = 'Submitted!';
+    status.style.display = 'block';
+    setTimeout(() => { status.style.display = 'none'; }, 2000);
+  }
   await refresh();
 }
 

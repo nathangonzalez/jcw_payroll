@@ -8,9 +8,14 @@
 import fs from "fs";
 import path from "path";
 import ExcelJS from "exceljs";
+import { fileURLToPath } from "url";
 import { getBillRate } from "../billing.js";
 import { getEmployeeCategory, splitEntriesWithOT, calculatePayWithOT } from "../classification.js";
 import { isHoliday } from "../holidays.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const LOGO_PATH = path.resolve(__dirname, "..", "..", "public", "icon-192.png");
 
 /**
  * Generate weekly XLSX files for all employees with approved entries
@@ -80,7 +85,9 @@ export async function generateWeeklyExports({ db, weekStart }) {
   for (const [empId, emp] of byEmployee) {
     const category = getEmployeeCategory(emp.name);
     const workbook = new ExcelJS.Workbook();
+    const logoId = addLogoImage(workbook);
     const ws = workbook.addWorksheet("Weekly Timesheet");
+    addLogoToSheet(ws, logoId, 5.6);
 
     // Header row (match monthly per-employee format)
     ws.columns = [
@@ -198,6 +205,7 @@ export async function generateWeeklyExports({ db, weekStart }) {
     const filepath = path.join(outputDir, filename);
     // Also include a second sheet that matches the "Jason" schema requested
     const jasonSheet = workbook.addWorksheet("Jason Schema");
+    addLogoToSheet(jasonSheet, logoId, 7.6);
     // Jason schema: Employee, Employee ID, Date, Client, Hours, Rate, Total, Type, Notes
     jasonSheet.addRow(["Employee", "Employee ID", "Date", "Client", "Hours", "Rate", "Total", "Type", "Notes"]);
     jasonSheet.getRow(1).font = { bold: true };
@@ -296,6 +304,28 @@ function ensureDir(dir) {
 
 function round2(n) {
   return Math.round(Number(n) * 100) / 100;
+}
+
+function addLogoImage(workbook) {
+  try {
+    if (!fs.existsSync(LOGO_PATH)) return null;
+    const buffer = fs.readFileSync(LOGO_PATH);
+    return workbook.addImage({ buffer, extension: "png" });
+  } catch (e) {
+    return null;
+  }
+}
+
+function addLogoToSheet(ws, logoId, col = 5.6) {
+  try {
+    if (!logoId) return;
+    ws.addImage(logoId, {
+      tl: { col, row: 0 },
+      ext: { width: 90, height: 28 }
+    });
+    const row1 = ws.getRow(1);
+    row1.height = Math.max(row1.height || 15, 24);
+  } catch (e) {}
 }
 
 function formatSheet(ws) {

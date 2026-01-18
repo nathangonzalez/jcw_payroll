@@ -18,19 +18,21 @@
 import fs from "fs";
 import path from "path";
 import ExcelJS from "exceljs";
+import { fileURLToPath } from "url";
 import { getBillRate } from "../billing.js";
 import { getEmployeeCategory } from "../classification.js";
 import { isHoliday } from "../holidays.js";
+import { weekStartYMD, ymdToDate } from "../time.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const LOGO_PATH = path.resolve(__dirname, "..", "..", "public", "icon-192.png");
 
 /**
- * Get the Sunday that starts the week containing a given date
+ * Get the payroll week start (Wednesday by default) that contains a given date
  */
-function getWeekSunday(dateStr) {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const date = new Date(y, m - 1, d);
-  const day = date.getDay(); // 0 = Sunday
-  date.setDate(date.getDate() - day);
-  return formatYmd(date);
+function getPayrollWeekStart(dateStr) {
+  return weekStartYMD(ymdToDate(dateStr));
 }
 
 /**
@@ -54,21 +56,14 @@ function formatWeekName(sundayStr) {
 }
 
 /**
- * Return an array of Sunday week-start strings (YYYY-MM-DD) that intersect the month range
+ * Return an array of payroll week-start strings (YYYY-MM-DD) that intersect the month range
  */
-function getSundaysForMonth(monthStartStr, nextMonthStr) {
-  const [sy, sm, sd] = monthStartStr.split("-").map(Number);
-  const [ny, nm, nd] = nextMonthStr.split("-").map(Number);
-  const start = new Date(sy, sm - 1, sd);
-  // find the Sunday on or before the first of the month
-  const firstSunday = new Date(start);
-  const day = firstSunday.getDay();
-  firstSunday.setDate(firstSunday.getDate() - day);
-
-  const end = new Date(ny, nm - 1, nd);
+function getWeekStartsForMonth(monthStartStr, nextMonthStr) {
+  const end = ymdToDate(nextMonthStr);
+  const firstWeekStart = weekStartYMD(ymdToDate(monthStartStr));
   const weeks = [];
-  for (let d = new Date(firstSunday); d < end; d.setDate(d.getDate() + 7)) {
-    weeks.push(formatYmd(new Date(d)));
+  for (let d = ymdToDate(firstWeekStart); d < end; d.setDate(d.getDate() + 7)) {
+    weeks.push(formatYmd(d));
   }
   return weeks;
 }
@@ -115,9 +110,9 @@ export async function generateMonthlyExport({ db, month }) {
       category: getEmployeeCategory(r.employee_name)
     };
 
-    const weekSunday = getWeekSunday(row.date);
-    if (!byWeek.has(weekSunday)) byWeek.set(weekSunday, []);
-    byWeek.get(weekSunday).push(row);
+    const weekStart = getPayrollWeekStart(row.date);
+    if (!byWeek.has(weekStart)) byWeek.set(weekStart, []);
+    byWeek.get(weekStart).push(row);
 
     // monthly aggregation: customer -> employee -> { empId, name, hours, category }
     if (!monthlyAgg.has(row.custId)) monthlyAgg.set(row.custId, { name: row.custName, employees: new Map() });
@@ -128,16 +123,18 @@ export async function generateMonthlyExport({ db, month }) {
   }
 
   // Build a list of all Sunday week-starts that intersect the month range
-  const sortedWeeks = getSundaysForMonth(monthStart, nextMonth);
+  const sortedWeeks = getWeekStartsForMonth(monthStart, nextMonth);
 
   // Create workbook
   const workbook = new ExcelJS.Workbook();
+  const logoId = addLogoImage(workbook);
 
   // Track weekly totals for summary sheet formulas
   const weeklyTotals = [];
 
   // Create Monthly Breakdown sheet first (promote it to front)
   const monthlySheet = workbook.addWorksheet('Monthly Breakdown');
+  addLogoToSheet(monthlySheet, logoId, 9.2);
   setupWeeklyColumns(monthlySheet);
 
   // Create a sheet for each week using the weekly sheet builder
@@ -147,6 +144,7 @@ export async function generateMonthlyExport({ db, month }) {
     const weekEntries = byWeek.get(weekSunday);
     const sheetName = formatWeekName(weekSunday);
     const ws = workbook.addWorksheet(sheetName);
+    addLogoToSheet(ws, logoId, 7.2);
     setupWeeklyColumns(ws);
     const result = buildWeeklySheet(db, ws, weekEntries);
     // result contains weekTotal and weekTotalRow to reference in summary
@@ -225,6 +223,7 @@ export async function generateMonthlyExport({ db, month }) {
   // Ensure numeric formatting
   monthlySheet.getColumn(5).numFmt = '"$"#,##0.00';
   monthlySheet.getColumn(11).numFmt = '"$"#,##0.00';
+  try { formatSheet(monthlySheet); } catch (e) {}
 
   // Add one sheet per employee containing all their entries for the month
   const byEmployee = new Map();
@@ -243,6 +242,7 @@ export async function generateMonthlyExport({ db, month }) {
       suffix++;
     }
     const ws = workbook.addWorksheet(sheetName);
+    addLogoToSheet(ws, logoId, 7.2);
     // Columns: Date, Customer, Hours, Type, Rate, Total, Notes
     ws.columns = [
       { header: 'Date', key: 'date', width: 12 },
@@ -276,6 +276,7 @@ export async function generateMonthlyExport({ db, month }) {
     // Format currency
     ws.getColumn('rate').numFmt = '"$"#,##0.00';
     ws.getColumn('total').numFmt = '"$"#,##0.00';
+    try { formatSheet(ws); } catch (e) {}
   }
 
   // Note: Monthly Summary sheet removed. `Monthly Breakdown` has been populated above.
@@ -507,7 +508,9 @@ function buildWeeklySheet(db, ws, entries = []) {
   totalRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4472C4" } };
   totalRow.getCell(1).font = { bold: true, size: 12, color: { argb: "FFFFFFFF" } };
   totalRow.getCell(5).font = { bold: true, size: 12, color: { argb: "FFFFFFFF" } };
-  
+
+  try { formatSheet(ws); } catch (e) {}
+
   return { hourlyTotal: round2(hourlyTotal), adminTotal: round2(adminTotal), weekTotal, weekTotalRow };
 }
 
@@ -609,4 +612,49 @@ function ensureDir(dir) {
 
 function round2(n) {
   return Math.round(Number(n) * 100) / 100;
+}
+
+function addLogoImage(workbook) {
+  try {
+    if (!fs.existsSync(LOGO_PATH)) return null;
+    const buffer = fs.readFileSync(LOGO_PATH);
+    return workbook.addImage({ buffer, extension: "png" });
+  } catch (e) {
+    return null;
+  }
+}
+
+function addLogoToSheet(ws, logoId, col = 9.2) {
+  try {
+    if (!logoId) return;
+    ws.addImage(logoId, {
+      tl: { col, row: 0 },
+      ext: { width: 90, height: 28 }
+    });
+    const row1 = ws.getRow(1);
+    row1.height = Math.max(row1.height || 15, 24);
+  } catch (e) {}
+}
+
+function formatSheet(ws) {
+  try { ws.views = [{ state: 'frozen', ySplit: 1 }]; } catch (e) {}
+  const colMax = [];
+  ws.eachRow((row, rowNumber) => {
+    row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+      const val = cell.value;
+      let s = '';
+      if (val == null) s = '';
+      else if (typeof val === 'object' && val.text) s = String(val.text);
+      else s = String(val);
+      colMax[colNumber] = Math.max(colMax[colNumber] || 0, s.length);
+      if (rowNumber > 1) {
+        cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+      }
+      if (typeof cell.value === 'number') cell.alignment = { horizontal: 'right' };
+    });
+  });
+  ws.columns.forEach((col, idx) => {
+    const max = colMax[idx + 1] || 10;
+    col.width = Math.min(50, Math.max(12, Math.ceil(max + 2)));
+  });
 }
