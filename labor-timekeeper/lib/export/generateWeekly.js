@@ -86,22 +86,29 @@ export async function generateWeeklyExports({ db, weekStart }) {
     const category = getEmployeeCategory(emp.name);
     const workbook = new ExcelJS.Workbook();
     const logoId = addLogoImage(workbook);
-    const ws = workbook.addWorksheet("Weekly Timesheet");
-    addLogoToSheet(ws, logoId, 5.6);
+    const ws = workbook.addWorksheet("Sheet1");
+    addLogoToSheet(ws, logoId, 7.2);
 
-    // Header row (match monthly per-employee format)
+    // Jason Green.xls-style header
     ws.columns = [
-      { header: 'Date', key: 'date', width: 12 },
-      { header: 'Customer', key: 'cust', width: 25 },
-      { header: 'Hours', key: 'hours', width: 8 },
-      { header: 'Type', key: 'type', width: 10 },
-      { header: 'Rate', key: 'rate', width: 10 },
-      { header: 'Total', key: 'total', width: 12 },
-      { header: 'Notes', key: 'notes', width: 30 }
+      { width: 10 }, // Date
+      { width: 22 }, // Client Name
+      { width: 12 }, // Time Start
+      { width: 10 }, // Lunch
+      { width: 12 }, // Time Out
+      { width: 14 }, // Hours Per Job
+      { width: 3 },  // spacer
+      { width: 22 }, // Client
+      { width: 10 }, // Hours
+      { width: 10 }, // Rate
+      { width: 12 }, // Total
     ];
-    ws.getRow(1).font = { bold: true };
-    ws.getRow(1).eachCell((cell) => {
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
+    const headerRow = ws.addRow(["Date", "Client Name", "Time Start", "Lunch", "Time Out", "Hours Per Job", "", "Client", "Hours", "Rate", "Total"]);
+    headerRow.font = { bold: true };
+    headerRow.eachCell((cell, colNum) => {
+      if ([1,2,3,4,5,6,8,9,10,11].includes(colNum)) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
+      }
     });
 
     // Build entries with rate lookup and type assignment
@@ -124,130 +131,125 @@ export async function generateWeeklyExports({ db, weekStart }) {
     let empOTHours = 0;
     let empTotalAmount = 0;
 
-    // Add data rows
+    // Prepare entries grouped by date for left panel
+    const entriesByDate = new Map();
     for (const entry of processedEntries) {
-      const hours = Number(entry.hours);
-      const rate = entry.rate;
-      
-      // Determine type: check for holiday first, then regular/OT
-      let type = entry.type || "Regular";
-      if (entry.holidayName) {
-        type = "Holiday";
-      }
-      // Check notes for PTO indicator
-      if (entry.notes?.toLowerCase().includes("pto")) {
-        type = "PTO";
-      }
+      const key = entry.work_date;
+      if (!entriesByDate.has(key)) entriesByDate.set(key, []);
+      entriesByDate.get(key).push(entry);
+    }
+    const sortedDates = [...entriesByDate.keys()].sort();
 
-      const otMultiplier = type === "OT" ? 1.5 : 1;
-      const total = round2(hours * rate * otMultiplier);
+    const leftRows = [];
+    const summaryMap = new Map();
 
-      ws.addRow([
-        entry.work_date,
-        entry.customer_name,
-        hours,
-        type,
-        rate,
-        total,
-        entry.notes || ''
-      ]);
+    for (const date of sortedDates) {
+      const dayEntries = entriesByDate.get(date);
+      const dayObj = new Date(date + "T12:00:00");
+      const dayName = dayObj.toLocaleDateString("en-US", { weekday: "short" });
+      const dayNum = String(dayObj.getDate());
+      let first = true;
+      for (const entry of dayEntries) {
+        const hours = Number(entry.hours);
+        const rate = entry.rate;
 
-      empTotalHours += hours;
-      if (type === "OT") {
-        empOTHours += hours;
-      } else {
-        empRegularHours += hours;
+        let type = entry.type || "Regular";
+        if (entry.holidayName) type = "Holiday";
+        if (entry.notes?.toLowerCase().includes("pto")) type = "PTO";
+
+        const clientName = type === "PTO" ? "PTO" : (type === "Holiday" ? "Holiday Pay" : entry.customer_name);
+        const dateLabel = first ? dayName : dayNum;
+        const timeStart = first ? 7.5 : "";
+        const lunch = first ? 0.5 : "";
+        const timeOut = first ? 16 : "";
+
+        leftRows.push([dateLabel, clientName, timeStart, lunch, timeOut, hours, "", "", "", "", ""]);
+
+        const otMultiplier = type === "OT" ? 1.5 : 1;
+        const total = round2(hours * rate * otMultiplier);
+
+        empTotalHours += hours;
+        if (type === "OT") empOTHours += hours;
+        else empRegularHours += hours;
+        empTotalAmount += total;
+
+        const key = clientName.toLowerCase();
+        if (!summaryMap.has(key)) summaryMap.set(key, { name: clientName, hours: 0, total: 0, rate });
+        const agg = summaryMap.get(key);
+        agg.hours += hours;
+        agg.total += total;
+        agg.rate = rate;
+
+        first = false;
       }
-      empTotalAmount += total;
     }
 
-    // Add subtotal row
-    ws.addRow([]);
-    const subtotalRow = ws.addRow(["", "SUBTOTAL", round2(empTotalHours), `Reg: ${round2(empRegularHours)} / OT: ${round2(empOTHours)}`, "", round2(empTotalAmount), ""]);
-    subtotalRow.font = { bold: true };
-    subtotalRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF2CC' } };
+    for (const r of leftRows) ws.addRow(r);
+    const desiredTotalRow = 38;
+    while (ws.rowCount < desiredTotalRow - 1) ws.addRow(["", "", "", "", "", "", "", "", "", "", ""]);
 
-    // Category info row
-    ws.addRow([`Category: ${category.toUpperCase()}`, "", "", "", "", "", ""]);
+    const totalRow = ["", "", "", "", "Total:", round2(empTotalHours), "", "", "", "", ""];
+    ws.addRow(totalRow);
 
-    // Per-employee hourly/admin subtotals and grand total
-    const empHourlyAmount = category === 'admin' ? 0 : round2(empTotalAmount);
-    const empAdminAmount = category === 'admin' ? round2(empTotalAmount) : 0;
-    const empGrandTotal = round2(empHourlyAmount + empAdminAmount);
+    // Right panel summary (client totals)
+    const summaryRows = [...summaryMap.values()].sort((a, b) => a.name.localeCompare(b.name));
+    let rIdx = 2;
+    let totalHours = 0;
+    let totalAmount = 0;
+    const rateSet = new Set();
+    for (const s of summaryRows) {
+      const row = ws.getRow(rIdx);
+      row.getCell(8).value = s.name;
+      row.getCell(9).value = round2(s.hours);
+      row.getCell(10).value = s.rate;
+      row.getCell(11).value = round2(s.total);
+      totalHours += s.hours;
+      totalAmount += s.total;
+      rateSet.add(s.rate);
+      rIdx++;
+    }
+    const totalSummaryRow = ws.getRow(rIdx);
+    totalSummaryRow.getCell(8).value = "TOTAL:";
+    totalSummaryRow.getCell(9).value = round2(totalHours);
+    totalSummaryRow.getCell(10).value = rateSet.size === 1 ? [...rateSet][0] : "";
+    totalSummaryRow.getCell(11).value = round2(totalAmount);
 
-    ws.addRow([]);
-    const hourlyRow = ws.addRow(["", "HOURLY SUBTOTAL", "", "", "", empHourlyAmount, ""]);
-    const adminRow = ws.addRow(["", "ADMIN SUBTOTAL", "", "", "", empAdminAmount, ""]);
-    const grandRow = ws.addRow(["", "GRAND TOTAL", "", "", "", empGrandTotal, ""]);
-    hourlyRow.font = { bold: true };
-    adminRow.font = { bold: true };
-    grandRow.font = { bold: true, color: { argb: 'FF0000' } };
-    hourlyRow.fill = adminRow.fill = {
-      type: "pattern",
-      pattern: "solid",
-      fgColor: { argb: "FFFAF3E0" },
-    };
-    grandRow.fill = {
-      type: "pattern",
-      pattern: "solid",
-      fgColor: { argb: "FFE8F8E0" },
-    };
-    // Ensure currency formatting for the totals and rate columns
-    ws.getColumn('rate').numFmt = '"$"#,##0.00';
-    ws.getColumn('total').numFmt = '"$"#,##0.00';
-
-    // Apply formatting helper to match repo style
+    ws.getColumn(10).numFmt = '"$"#,##0.00';
+    ws.getColumn(11).numFmt = '"$"#,##0.00';
     try { formatSheet(ws); } catch (e) {}
 
     // Save file
     const safeName = emp.name.replace(/[^a-zA-Z0-9]/g, "_");
     const filename = `${safeName}_${weekStart}.xlsx`;
     const filepath = path.join(outputDir, filename);
-    // Also include a second sheet that matches the "Jason" schema requested
-    const jasonSheet = workbook.addWorksheet("Jason Schema");
-    addLogoToSheet(jasonSheet, logoId, 7.6);
-    // Jason schema: Employee, Employee ID, Date, Client, Hours, Rate, Total, Type, Notes
-    jasonSheet.addRow(["Employee", "Employee ID", "Date", "Client", "Hours", "Rate", "Total", "Type", "Notes"]);
-    jasonSheet.getRow(1).font = { bold: true };
-
-    for (const entry of processedEntries) {
-      const hours = Number(entry.hours);
-      const rate = entry.rate;
-      let type = entry.type || "Regular";
-      if (entry.holidayName) type = "Holiday";
-      if (entry.notes?.toLowerCase().includes("pto")) type = "PTO";
-      const otMultiplier = type === "OT" ? 1.5 : 1;
-      const total = round2(hours * rate * otMultiplier);
-
-      jasonSheet.addRow([
-        emp.name,
-        empId,
-        entry.work_date,
-        entry.customer_name,
-        hours,
-        rate,
-        total,
-        type,
-        entry.notes || "",
-      ]);
-    }
-
-    // format columns for Jason sheet
-    jasonSheet.columns = [
-      { width: 20 }, // Employee
-      { width: 18 }, // Employee ID
-      { width: 12 }, // Date
-      { width: 25 }, // Client
-      { width: 8 },  // Hours
-      { width: 10 }, // Rate
-      { width: 12 }, // Total
-      { width: 10 }, // Type
-      { width: 30 }, // Notes
+    // Office Use Only sheet (template-style)
+    const officeSheet = workbook.addWorksheet("Sheet2");
+    addLogoToSheet(officeSheet, logoId, 7.2);
+    officeSheet.columns = [
+      { width: 16 }, { width: 10 }, { width: 10 }, { width: 12 },
+      { width: 2 }, { width: 16 }, { width: 10 }, { width: 10 }, { width: 12 }
     ];
-    jasonSheet.getColumn(6).numFmt = '"$"#,##0.00';
-    jasonSheet.getColumn(7).numFmt = '"$"#,##0.00';
+    officeSheet.getCell("A1").value = "OFFICE USE ONLY:";
+    officeSheet.getCell("A1").font = { bold: true };
+    const weekRange = `${formatMdy(startDate)} - ${formatMdy(endDate)}`;
+    officeSheet.getCell("A5").value = emp.name;
+    officeSheet.getCell("F5").value = weekRange;
+    officeSheet.getCell("A7").value = "JOB";
+    officeSheet.getCell("B7").value = "HOURS";
+    officeSheet.getCell("C7").value = "RATE";
+    officeSheet.getCell("D7").value = "TOTAL";
+    officeSheet.getCell("F7").value = "JOB";
+    officeSheet.getCell("G7").value = "HOURS";
+    officeSheet.getCell("H7").value = "RATE";
+    officeSheet.getCell("I7").value = "TOTAL";
+    officeSheet.getRow(7).font = { bold: true };
+    officeSheet.getCell("A21").value = "HOURS";
+    officeSheet.getCell("B21").value = "RATE";
+    officeSheet.getCell("C21").value = "TOTAL";
+    officeSheet.getRow(21).font = { bold: true };
 
-    try { formatSheet(jasonSheet); } catch (e) {}
+    // Blank Sheet3 to match template
+    workbook.addWorksheet("Sheet3");
     await workbook.xlsx.writeFile(filepath);
 
     files.push({
@@ -294,6 +296,13 @@ function formatYmd(date) {
   const m = String(date.getMonth() + 1).padStart(2, "0");
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
+}
+
+function formatMdy(date) {
+  const m = date.getMonth() + 1;
+  const d = date.getDate();
+  const y = String(date.getFullYear()).slice(-2);
+  return `${m}/${d}/${y}`;
 }
 
 function ensureDir(dir) {
