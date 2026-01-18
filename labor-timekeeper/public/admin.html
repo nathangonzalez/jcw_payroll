@@ -7,19 +7,8 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <!-- Admin Secret Gate -->
-  <div id="secretGate" class="container" style="margin-top:50px;">
-    <div class="card" style="max-width:320px; margin:0 auto; text-align:center;">
-      <h2>Admin Secret</h2>
-      <p class="muted small">Enter admin secret to continue</p>
-      <input id="secretInput" type="password" placeholder="********" style="font-size:1.1rem; text-align:center; letter-spacing:3px; padding:12px;" />
-      <button id="secretBtn" class="primary" style="margin-top:12px; width:100%;">Unlock</button>
-      <p id="secretError" class="small" style="color:#e74c3c; margin-top:8px; display:none;">Incorrect admin secret</p>
-    </div>
-  </div>
-
   <!-- PIN Gate -->
-  <div id="pinGate" class="container" style="margin-top:50px; display:none;">
+  <div id="pinGate" class="container" style="margin-top:50px;">
     <div class="card" style="max-width:300px; margin:0 auto; text-align:center;">
       <h2>🔒 Admin Access</h2>
       <p class="muted small">Enter PIN to continue</p>
@@ -34,9 +23,7 @@
     <div class="row" style="align-items:center; justify-content:space-between; gap:12px;">
       <h1>Admin</h1>
       <div style="display:flex; gap:8px; align-items:center;">
-        <label style="font-size:13px; display:flex; gap:6px; align-items:center;">
-          <input type="checkbox" id="showDevToggle" /> Show Dev Controls
-        </label>
+        <button id="toggleDevBtn" class="badge" type="button">Show Dev Tools</button>
         <a href="/app" class="badge">Employee view</a>
       </div>
     </div>
@@ -107,63 +94,12 @@
 
 <script>
 const ADMIN_PIN = '7707';
-const SECRET_KEY = 'labor_timekeeper_admin_secret';
-let ADMIN_SECRET = new URLSearchParams(location.search).get('admin_secret') || '';
+const ADMIN_SECRET = new URLSearchParams(location.search).get('admin_secret') || '';
 const IS_PROD_HOST = location.hostname.endsWith('appspot.com');
 const FORCE_DEV = new URLSearchParams(location.search).get('dev') === '1';
 const PIN_KEY = 'labor_timekeeper_admin_auth';
 
 function el(id){ return document.getElementById(id); }
-
-// Admin Secret Gate Logic
-async function verifySecret() {
-  const input = el('secretInput').value;
-  if (!input) return;
-  const r = await fetch('/api/admin/schema', {
-    headers: { 'x-admin-secret': input }
-  });
-  if (r.ok) {
-    ADMIN_SECRET = input;
-    sessionStorage.setItem(SECRET_KEY, input);
-    el('secretGate').style.display = 'none';
-    el('pinGate').style.display = 'block';
-    el('pinInput').focus();
-  } else {
-    el('secretError').style.display = 'block';
-    el('secretInput').value = '';
-    el('secretInput').focus();
-  }
-}
-
-function initSecretGate() {
-  const saved = sessionStorage.getItem(SECRET_KEY);
-  if (saved) ADMIN_SECRET = saved;
-  if (ADMIN_SECRET) {
-    el('secretInput').value = ADMIN_SECRET;
-    verifySecret();
-    return;
-  }
-  // If server doesn't require a secret, skip the gate
-  fetch('/api/admin/schema').then(r => {
-    if (r.ok) {
-      el('secretGate').style.display = 'none';
-      el('pinGate').style.display = 'block';
-      el('pinInput').focus();
-    } else {
-      el('secretGate').style.display = 'block';
-      el('pinGate').style.display = 'none';
-      el('secretBtn').onclick = verifySecret;
-      el('secretInput').onkeydown = (e) => { if (e.key === 'Enter') verifySecret(); };
-      el('secretInput').focus();
-    }
-  }).catch(() => {
-    el('secretGate').style.display = 'block';
-    el('pinGate').style.display = 'none';
-    el('secretBtn').onclick = verifySecret;
-    el('secretInput').onkeydown = (e) => { if (e.key === 'Enter') verifySecret(); };
-    el('secretInput').focus();
-  });
-}
 
 // PIN Gate Logic
 function checkPin() {
@@ -177,7 +113,6 @@ function checkPin() {
 
 function showAdmin() {
   el('pinGate').style.display = 'none';
-  el('secretGate').style.display = 'none';
   el('adminContent').style.display = 'block';
   init();
 }
@@ -198,8 +133,7 @@ function verifyPin() {
 el('pinBtn').onclick = verifyPin;
 el('pinInput').onkeydown = (e) => { if (e.key === 'Enter') verifyPin(); };
 
-// Init secret gate + then PIN gate
-initSecretGate();
+// Check if already authenticated
 if (!checkPin()) {
   // PIN gate remains until verified
 }
@@ -255,17 +189,20 @@ function setDevVisibility(visible) {
 }
 
 function initDevToggle() {
-  const cb = el('showDevToggle');
-  if (IS_PROD_HOST && !FORCE_DEV) {
-    setDevVisibility(false);
-    if (cb && cb.parentElement) cb.parentElement.style.display = 'none';
-    return;
-  }
+  const btn = el('toggleDevBtn');
+  const dev = el('devControls');
+  if (!btn || !dev) return;
   const raw = localStorage.getItem('admin_show_dev');
   const pref = raw === null ? !IS_PROD_HOST : (raw === '1');
   setDevVisibility(pref);
-  if (!cb) return;
-  cb.onchange = () => setDevVisibility(cb.checked);
+  btn.textContent = pref ? 'Hide Dev Tools' : 'Show Dev Tools';
+  if (IS_PROD_HOST && !FORCE_DEV) btn.textContent = 'Show Dev Tools';
+  btn.onclick = () => {
+    const isVisible = dev.style.display !== 'none';
+    const next = !isVisible;
+    setDevVisibility(next);
+    btn.textContent = next ? 'Hide Dev Tools' : 'Show Dev Tools';
+  };
 }
 
 // Initialize dev toggle state on load

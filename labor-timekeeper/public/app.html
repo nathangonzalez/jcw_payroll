@@ -15,7 +15,7 @@
   <div class="container">
     <div class="row" style="align-items:center; justify-content:space-between;">
       <h1>Log Hours</h1>
-      <a href="/admin" class="badge">Admin</a>
+      <button id="adminBtn" class="badge" type="button">Admin</button>
     </div>
 
     <!-- Employee selector at top -->
@@ -91,6 +91,16 @@ const LAST_HOURS_KEY = 'labor_timekeeper_last_hours';
 
 function el(id){ return document.getElementById(id); }
 function fmt(n){ return (Math.round(n*100)/100).toString(); }
+
+function openAdmin() {
+  const secret = prompt('Enter admin secret');
+  if (!secret) return;
+  const url = `/admin?admin_secret=${encodeURIComponent(secret)}`;
+  window.location.href = url;
+}
+
+const adminBtn = el('adminBtn');
+if (adminBtn) adminBtn.onclick = openAdmin;
 
 async function api(url, opts){
   const r = await fetch(url, opts);
