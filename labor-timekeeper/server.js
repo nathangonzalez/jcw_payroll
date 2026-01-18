@@ -1557,7 +1557,14 @@ app.get("/api/admin/archives", async (req, res) => {
 /** SPA fallbacks - serve app at root */
 app.get("/", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "app.html")));
 app.get("/app", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "app.html")));
-app.get("/admin", (req, res) => res.sendFile(path.join(PUBLIC_DIR, "admin.html")));
+app.get("/admin", (req, res) => {
+  const adminSecret = process.env.ADMIN_SECRET;
+  const provided = req.query?.admin_secret || req.headers['x-admin-secret'];
+  if (adminSecret && provided !== adminSecret) {
+    return res.status(403).send("admin secret required");
+  }
+  return res.sendFile(path.join(PUBLIC_DIR, "admin.html"));
+});
 
 const port = Number(process.env.PORT || 3000);
 app.listen(port, () => {
