@@ -166,6 +166,52 @@ function ensureSimulationSeedData(sampleEntries) {
   ensureSimulationEmployees(sampleEntries);
 }
 
+function ensureSimulationRates() {
+  // Apply default bill rates for employees if missing (use seed/employees.json)
+  const employees = readSeedJson('employees.json') || [];
+  const update = db.prepare(`
+    UPDATE employees
+    SET
+      default_bill_rate = COALESCE(NULLIF(default_bill_rate, 0), ?),
+      default_pay_rate = COALESCE(NULLIF(default_pay_rate, 0), ?)
+    WHERE LOWER(name) = LOWER(?)
+  `);
+  let updatedEmployees = 0;
+  for (const e of employees) {
+    if (!e?.name) continue;
+    const rate = Number(e.default_bill_rate || 0);
+    const r = update.run(rate, rate, e.name);
+    if (r.changes > 0) updatedEmployees += r.changes;
+  }
+
+  // If overrides are empty, apply seed overrides for simulation-only scenarios
+  const overrideCount = db.prepare("SELECT COUNT(*) as n FROM rate_overrides").get().n || 0;
+  let updatedOverrides = 0;
+  if (overrideCount === 0) {
+    const overrides = readSeedJson('rate_overrides.json') || [];
+    if (overrides.length > 0) {
+      const getEmp = db.prepare("SELECT id FROM employees WHERE name = ? OR LOWER(name) = LOWER(?)");
+      const getCust = db.prepare("SELECT id FROM customers WHERE name = ? OR LOWER(name) = LOWER(?)");
+      const upsertRate = db.prepare(`
+        INSERT INTO rate_overrides (id, employee_id, customer_id, bill_rate, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(employee_id, customer_id) DO UPDATE SET bill_rate=excluded.bill_rate
+      `);
+      const now = new Date().toISOString();
+      for (const o of overrides) {
+        const empName = o.employee_name === "Chris J" ? "Chris Jacobi" : o.employee_name;
+        const emp = getEmp.get(empName, empName);
+        const cust = getCust.get(o.customer_name, o.customer_name);
+        if (!emp || !cust) continue;
+        upsertRate.run(id("ro_"), emp.id, cust.id, Number(o.bill_rate), now);
+        updatedOverrides++;
+      }
+    }
+  }
+
+  return { employeesUpdated: updatedEmployees, overridesUpdated: updatedOverrides };
+}
+
 /** Health */
 app.get("/api/health", (req, res) => {
   try {
@@ -1427,7 +1473,9 @@ app.post('/api/admin/simulate-month', async (req, res) => {
       weeks.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
     }
 
+    const ratesSeeded = ensureSimulationRates();
     const results = {};
+    const missing = [];
     for (const wk of weeks) {
       // call simulate-week logic by constructing body and reusing core insertion code (reset/submit/approve per week)
       // We'll reuse the SAMPLE_ENTRIES pattern from simulate-week
@@ -1480,7 +1528,13 @@ app.post('/api/admin/simulate-month', async (req, res) => {
           const custKey = String(entry.customer || '').toLowerCase();
           let cust = custMap.get(custKey);
           if (!cust) cust = customers.find(c => c.name.toLowerCase().includes(custKey));
-          if (!emp || !cust) { skipped++; continue; }
+          if (!emp || !cust) {
+            skipped++;
+            if (missing.length < 50) {
+              missing.push({ employee: entry.employee, customer: entry.customer, week: wk, reason: !emp ? 'employee' : 'customer' });
+            }
+            continue;
+          }
           const empNameLower = (emp.name || '').toLowerCase();
           if (empNameLower.includes('jafid')) { skipped++; continue; }
 
@@ -1510,7 +1564,7 @@ app.post('/api/admin/simulate-month', async (req, res) => {
       }
     }
 
-    res.json({ ok: true, month, seeded: results });
+    res.json({ ok: true, month, seeded: results, ratesSeeded, missing });
   } catch (err) {
     console.error('[admin/simulate-month]', err);
     res.status(500).json({ error: String(err?.message || err) });
