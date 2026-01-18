@@ -34,7 +34,7 @@
     <div class="row" style="align-items:center; justify-content:space-between; gap:12px;">
       <h1>Admin</h1>
       <div style="display:flex; gap:8px; align-items:center;">
-        <button id="toggleDevBtn" class="badge" type="button">Show Dev Tools</button>
+        <button id="toggleDevBtn" class="badge" type="button">Show Sim Tools</button>
         <a href="/app" class="badge">Employee view</a>
       </div>
     </div>
@@ -43,8 +43,8 @@
       <h2>Approvals</h2>
       <div class="row">
         <div class="col">
-          <label class="small muted">Week start (YYYY-MM-DD)</label>
-          <select id="weekStart"></select>
+          <label class="small muted">Payroll Week</label>
+          <div id="payrollWeekLabel" class="small muted"></div>
         </div>
         <div class="col">
           <label class="small muted">&nbsp;</label>
@@ -63,12 +63,12 @@
       <h2>📊 Payroll Reports</h2>
       <div class="row">
         <div class="col">
-          <label class="small muted">Week Start</label>
-          <select id="pipelineWeek"></select>
+          <label class="small muted">Payroll Week</label>
+          <div id="reportWeekLabel" class="small muted"></div>
         </div>
         <div class="col">
           <label class="small muted">Month</label>
-          <input id="pipelineMonth" placeholder="YYYY-MM" />
+          <div id="reportMonthLabel" class="small muted"></div>
         </div>
       </div>
       <div id="devControls">
@@ -197,6 +197,9 @@ async function api(url, opts){
 }
 
 let submittedCache=[];
+let CURRENT_WEEK_START = '';
+let CURRENT_WEEK_RANGE = '';
+let CURRENT_MONTH = '';
 
 async function init(){
   el('loadBtn').onclick = loadSubmitted;
@@ -209,19 +212,22 @@ async function init(){
   el('previewReconcileBtn').onclick = previewReconcile;
   el('closeMonthBtn').onclick = closeMonth;
 
-  // Set default values for pipeline inputs
+  // Default month values
   const now = new Date();
   const ym = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
-  el('pipelineMonth').value = ym;
+  CURRENT_MONTH = ym;
+  el('reportMonthLabel').textContent = ym;
   el('closeMonth').value = ym;
-  // populate week dropdowns from available exports (falls back to current week)
-  await populateWeekSelects();
 
-  // default week start: ask server by loading approvals once without week
+  // Default week start: ask server by loading approvals once without week
   const data = await api('/api/approvals?_=' + Date.now());
-  // set defaults on the selects to the server-provided week_start
-  setSelectValue('weekStart', data.week_start);
-  setSelectValue('pipelineWeek', data.week_start);
+  CURRENT_WEEK_START = data.week_start || '';
+  const days = data.days || [];
+  const start = days[0]?.ymd || data.week_start;
+  const end = days[6]?.ymd || data.week_start;
+  CURRENT_WEEK_RANGE = (start && end) ? `${start} to ${end}` : (data.week_start || '');
+  el('payrollWeekLabel').textContent = CURRENT_WEEK_RANGE;
+  el('reportWeekLabel').textContent = CURRENT_WEEK_RANGE;
   submittedCache = data.submitted;
   renderSubmitted(data.submitted);
 }
@@ -233,135 +239,30 @@ function setDevVisibility(visible) {
   const dev = el('devControls');
   if (!dev) return;
   dev.style.display = visible ? 'block' : 'none';
-  try { localStorage.setItem('admin_show_dev', visible ? '1' : '0'); } catch(e){}
-  const cb = el('showDevToggle'); if (cb) cb.checked = !!visible;
 }
 
 function initDevToggle() {
   const btn = el('toggleDevBtn');
   const dev = el('devControls');
   if (!btn || !dev) return;
-  const raw = localStorage.getItem('admin_show_dev');
-  const pref = raw === null ? !IS_PROD_HOST : (raw === '1');
-  setDevVisibility(pref);
-  btn.textContent = pref ? 'Hide Dev Tools' : 'Show Dev Tools';
-  if (IS_PROD_HOST && !FORCE_DEV) btn.textContent = 'Show Dev Tools';
+  setDevVisibility(false);
+  btn.textContent = 'Show Sim Tools';
   btn.onclick = () => {
     const isVisible = dev.style.display !== 'none';
     const next = !isVisible;
     setDevVisibility(next);
-    btn.textContent = next ? 'Hide Dev Tools' : 'Show Dev Tools';
+    btn.textContent = next ? 'Hide Sim Tools' : 'Show Sim Tools';
   };
 }
 
 // Initialize dev toggle state on load
 initDevToggle();
 
-function setSelectValue(id, value) {
-  const s = el(id);
-  if (!s) return;
-  // if option exists select it, otherwise add an option and select
-  const opt = Array.from(s.options).find(o => o.value === value);
-  if (opt) {
-    s.value = value;
-  } else if (value) {
-    const newOpt = document.createElement('option');
-    newOpt.value = value;
-    newOpt.textContent = value + ' (default)';
-    s.prepend(newOpt);
-    s.value = value;
-  }
-}
-
-async function populateWeekSelects(){
-  try {
-    const resp = await api('/api/exports?_=' + Date.now());
-    const exports = resp.exports || [];
-    const weekOptions = [];
-    for (const m of exports) {
-      for (const w of m.weeks) {
-        weekOptions.push({ month: m.month, week: w });
-      }
-    }
-
-    // If no exports found, include current week start
-    if (weekOptions.length === 0) {
-      const today = new Date();
-      const y = today.getFullYear();
-      const m = String(today.getMonth() + 1).padStart(2, '0');
-      const d = String(today.getDate()).padStart(2, '0');
-      const defaultWeek = `${y}-${m}-${d}`;
-      weekOptions.push({ month: `${y}-${m}`, week: defaultWeek });
-    }
-
-    const weeksSorted = weekOptions.sort((a,b) => (a.week < b.week ? 1 : -1));
-
-    const wkSel = el('weekStart');
-    const pipelineSel = el('pipelineWeek');
-    if (!wkSel || !pipelineSel) return;
-
-    // clear existing
-    wkSel.innerHTML = '';
-    pipelineSel.innerHTML = '';
-
-    // Group by month for nicer labels
-    const grouped = {};
-    for (const w of weeksSorted) {
-      grouped[w.month] = grouped[w.month] || [];
-      grouped[w.month].push(w.week);
-    }
-
-    for (const month of Object.keys(grouped)) {
-      const optGroupLabel = month;
-      for (const wk of grouped[month]) {
-        const o1 = document.createElement('option');
-        o1.value = wk;
-        o1.textContent = `${wk} (${optGroupLabel})`;
-        wkSel.appendChild(o1);
-
-        const o2 = document.createElement('option');
-        o2.value = wk;
-        o2.textContent = `${wk} (${optGroupLabel})`;
-        pipelineSel.appendChild(o2);
-      }
-    }
-  } catch (err) {
-    console.warn('Failed to populate week selects', err);
-  }
-}
-
-async function simulateWeek(){
-  const week_start = el('pipelineWeek').value.trim();
-  if (!week_start) { alert('Enter week start date'); return; }
-  const reset = !!el('simReset').checked;
-  const submit = !!el('simSubmit').checked;
-  const approve = !!el('simApprove').checked;
-
-  if (!confirm(`Simulate week ${week_start}?\nReset: ${reset}\nSubmit: ${submit}\nApprove: ${approve}`)) return;
-
-  try {
-    showPipelineResult('Simulating week...');
-    const result = await api('/api/admin/simulate-week', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ week_start, reset, submit, approve })
-    });
-    const output = [
-      `🧪 Simulate Week: ${result.week_start}`,
-      `Created: ${result.created}`,
-      `Skipped: ${result.skipped}`,
-      `Deleted: ${result.deleted}`,
-      `Options: reset=${result.options.reset}, submit=${result.options.submit}, approve=${result.options.approve}`
-    ].join('\n');
-    showPipelineResult(output);
-  } catch (err) {
-    showPipelineResult(`❌ Error: ${err.message}`);
-  }
-}
+// Week dropdowns removed; use current week from server
 
 async function seedSampleWeeks(){
-  const month = (el('pipelineMonth').value || '').trim();
-  if (!month) { alert('Enter month (YYYY-MM) to seed'); return; }
+  const month = CURRENT_MONTH;
+  if (!month) { alert('Missing current month'); return; }
   // Default to submitted+approved so seeded data is ready for exports/tests
   const submit = true;
   const approve = true;
@@ -378,8 +279,8 @@ async function seedSampleWeeks(){
 
 // Report download functions
 async function downloadWeekly() {
-  const week_start = el('pipelineWeek').value.trim();
-  if (!week_start) { alert('Enter week start date'); return; }
+  const week_start = CURRENT_WEEK_START;
+  if (!week_start) { alert('Missing current week'); return; }
   try {
     showPipelineResult('Generating weekly exports...');
     const result = await api(`/api/admin/generate-week?week_start=${encodeURIComponent(week_start)}`);
@@ -409,8 +310,8 @@ async function downloadWeekly() {
 }
 
 async function downloadMonthly() {
-  const month = el('pipelineMonth').value.trim();
-  if (!month) { alert('Enter month (YYYY-MM)'); return; }
+  const month = CURRENT_MONTH;
+  if (!month) { alert('Missing current month'); return; }
   // Directly download the file; do not auto-seed. Use the Simulate button to populate data.
   window.location.href = `/api/export/monthly?month=${encodeURIComponent(month)}`;
 }
@@ -476,8 +377,7 @@ function showPipelineResult(text) {
 }
 
 async function loadSubmitted(){
-  // Try selected week, fall back to pipelineWeek, otherwise load current week
-  const week_start = (el('weekStart').value || el('pipelineWeek').value || '').trim();
+  const week_start = CURRENT_WEEK_START;
   const qs = week_start ? ('?week_start=' + encodeURIComponent(week_start) + '&_=' + Date.now()) : ('?_=' + Date.now());
   const data = await api('/api/approvals' + qs);
   submittedCache = data.submitted;

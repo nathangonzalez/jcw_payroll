@@ -7,7 +7,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from 'url';
 import { openDb, id } from "./lib/db.js";
-import { weekStartYMD, weekDates, todayYMD } from "./lib/time.js";
+import { weekStartYMD, weekDates, todayYMD, ymdToDate } from "./lib/time.js";
 import { transcribeAudio, parseVoiceCommand } from "./lib/voice.js";
 import { getOpenAI } from "./lib/openai.js";
 import { buildMonthlyWorkbook } from "./lib/export_excel.js";
@@ -1358,9 +1358,6 @@ app.post('/api/admin/seed-weeks', (req, res) => {
  */
 app.post('/api/admin/simulate-month', (req, res) => {
   try {
-    if (process.env.NODE_ENV === 'production') {
-      return res.status(403).json({ error: 'seeding disabled in production' });
-    }
     const adminSecret = process.env.ADMIN_SECRET;
     const provided = req.headers['x-admin-secret'] || req.body?.admin_secret;
     if (adminSecret && provided !== adminSecret) return res.status(403).json({ error: 'admin secret required' });
@@ -1373,14 +1370,12 @@ app.post('/api/admin/simulate-month', (req, res) => {
     const monthStart = `${month}-01`;
     const nextMonth = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`;
 
-    // helper to compute all sunday week starts intersecting the month
+    // compute payroll week starts (defaults to Wednesday) that intersect the month
     const weeks = [];
-    const s = new Date(y, m - 1, 1);
-    const day = s.getDay();
-    const firstSunday = new Date(s); firstSunday.setDate(firstSunday.getDate() - day);
-    const end = new Date(nextMonth.split('-').map(Number)[0], Number(nextMonth.split('-')[1]) - 1, 1);
-    for (let d = new Date(firstSunday); d < end; d.setDate(d.getDate() + 7)) {
-      weeks.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`);
+    const firstWeekStart = weekStartYMD(ymdToDate(monthStart));
+    const end = ymdToDate(nextMonth);
+    for (let d = ymdToDate(firstWeekStart); d < end; d.setDate(d.getDate() + 7)) {
+      weeks.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
     }
 
     const results = {};
