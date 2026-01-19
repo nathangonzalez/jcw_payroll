@@ -188,31 +188,28 @@ export async function generateWeeklyExports({ db, weekStart }) {
     const desiredTotalRow = 38;
     while (ws.rowCount < desiredTotalRow - 1) ws.addRow(["", "", "", "", "", "", "", "", "", "", ""]);
 
-    const totalRow = ["", "", "", "", "Total:", round2(empTotalHours), "", "", "", "", ""];
+    const totalRowIndex = ws.rowCount + 1;
+    const totalRow = ["", "", "", "", "Total:", { formula: `SUM(F2:F${totalRowIndex - 1})` }, "", "", "", "", ""];
     ws.addRow(totalRow);
 
     // Right panel summary (client totals)
     const summaryRows = [...summaryMap.values()].sort((a, b) => a.name.localeCompare(b.name));
     let rIdx = 2;
-    let totalHours = 0;
-    let totalAmount = 0;
     const rateSet = new Set();
     for (const s of summaryRows) {
       const row = ws.getRow(rIdx);
       row.getCell(8).value = s.name;
       row.getCell(9).value = round2(s.hours);
       row.getCell(10).value = s.rate;
-      row.getCell(11).value = round2(s.total);
-      totalHours += s.hours;
-      totalAmount += s.total;
+      row.getCell(11).value = { formula: `I${rIdx}*J${rIdx}` };
       rateSet.add(s.rate);
       rIdx++;
     }
     const totalSummaryRow = ws.getRow(rIdx);
     totalSummaryRow.getCell(8).value = "TOTAL:";
-    totalSummaryRow.getCell(9).value = round2(totalHours);
+    totalSummaryRow.getCell(9).value = { formula: `SUM(I2:I${rIdx - 1})` };
     totalSummaryRow.getCell(10).value = rateSet.size === 1 ? [...rateSet][0] : "";
-    totalSummaryRow.getCell(11).value = round2(totalAmount);
+    totalSummaryRow.getCell(11).value = { formula: `SUM(K2:K${rIdx - 1})` };
 
     ws.getColumn(10).numFmt = '"$"#,##0.00';
     ws.getColumn(11).numFmt = '"$"#,##0.00';
