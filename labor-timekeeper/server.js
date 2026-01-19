@@ -1514,8 +1514,7 @@ app.post('/api/admin/simulate-month', async (req, res) => {
           const workDate = new Date(yy, mm-1, dd + entry.dayOffset);
           const workDateYmd = `${workDate.getFullYear()}-${String(workDate.getMonth()+1).padStart(2,'0')}-${String(workDate.getDate()).padStart(2,'0')}`;
 
-          const exists = db.prepare(`SELECT id FROM time_entries WHERE employee_id=? AND customer_id=? AND work_date=?`).get(emp.id, cust.id, workDateYmd);
-          if (exists) { skipped++; continue; }
+          // Allow multiple entries for the same customer/day to match template layout
 
           const status = approve ? 'APPROVED' : (submit ? 'SUBMITTED' : 'DRAFT');
           const notes = entry.notes ? `Seeded sample hours - ${entry.notes}` : 'Seeded sample hours';
