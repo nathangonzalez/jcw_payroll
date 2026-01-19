@@ -90,8 +90,6 @@ export async function generateWeeklyExports({ db, weekStart }) {
     const workbook = new ExcelJS.Workbook();
     const logoId = addLogoImage(workbook);
     const ws = workbook.addWorksheet("Sheet1");
-    addLogoToSheet(ws, logoId, 7.2);
-
     // Jason Green.xls-style header
     ws.columns = [
       { width: 10 }, // Date
@@ -113,6 +111,7 @@ export async function generateWeeklyExports({ db, weekStart }) {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
       }
     });
+    addLogoToSheet(ws, logoId, 7.2);
 
     // Build entries with rate lookup and type assignment
     const enrichedEntries = emp.entries.map((e) => {
