@@ -134,13 +134,6 @@ async function verifySecret() {
 }
 
 function initSecretGate() {
-  const saved = sessionStorage.getItem(SECRET_KEY);
-  if (saved) ADMIN_SECRET = saved;
-  if (ADMIN_SECRET) {
-    el('secretInput').value = ADMIN_SECRET;
-    verifySecret();
-    return;
-  }
   el('secretGate').style.display = 'block';
   el('pinGate').style.display = 'none';
   el('secretBtn').onclick = verifySecret;
