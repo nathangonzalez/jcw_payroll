@@ -92,14 +92,10 @@ test.describe("Labor Timekeeper - Admin Page", () => {
       await secretInput.fill("7707");
       await page.click("#secretBtn");
     }
-    await page.waitForSelector("#pinInput", { state: "visible" });
-    // Enter PIN to unlock admin page
-    await page.fill("#pinInput", "7707");
-    await page.click("#pinBtn");
-    await page.waitForTimeout(300);
+    await page.waitForSelector("#adminContent", { state: "visible" });
   });
 
-  test("admin page loads with PIN unlock", async ({ page }) => {
+  test("admin page loads with secret unlock", async ({ page }) => {
     await expect(page.locator("h1")).toContainText("Admin");
   });
 
