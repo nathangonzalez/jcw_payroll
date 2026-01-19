@@ -143,6 +143,11 @@ export async function generateMonthlyExport({ db, month }) {
   // Use reverse chronological order so latest week appears first
   const weeksDesc = [...sortedWeeks].reverse();
   const firstWeekStart = sortedWeeks[0];
+  const firstWeekEnd = (() => {
+    const d = ymdToDate(firstWeekStart);
+    d.setDate(d.getDate() + 6);
+    return formatYmd(d);
+  })();
   for (const weekSunday of weeksDesc) {
     const weekEntries = byWeek.get(weekSunday);
     const sheetName = formatWeekName(weekSunday);
@@ -229,6 +234,17 @@ export async function generateMonthlyExport({ db, month }) {
   try { formatSheet(monthlySheet); } catch (e) {}
 
   // Add one sheet per employee in weekly timesheet format (first payroll week of the month)
+  const getEmpWeekEntries = db.prepare(`
+    SELECT te.*, e.name as employee_name, e.id as emp_id, c.name as customer_name, c.id as cust_id
+    FROM time_entries te
+    JOIN employees e ON e.id = te.employee_id
+    JOIN customers c ON c.id = te.customer_id
+    WHERE te.employee_id = ?
+      AND te.work_date >= ?
+      AND te.work_date <= ?
+      AND (te.status IS NULL OR te.status != 'DELETED')
+    ORDER BY te.work_date ASC, te.created_at ASC
+  `);
   const byEmployee = new Map();
   for (const r of entries) {
     if (!byEmployee.has(r.emp_id)) byEmployee.set(r.emp_id, { id: r.emp_id, name: r.employee_name, entries: [] });
@@ -245,10 +261,8 @@ export async function generateMonthlyExport({ db, month }) {
       suffix++;
     }
     const ws = workbook.addWorksheet(sheetName);
-    addLogoToSheet(ws, logoId, 7.2);
-
-    const weekEntries = empBucket.entries.filter(e => getPayrollWeekStart(e.work_date) === firstWeekStart);
-    buildTimesheetSheet(db, ws, weekEntries);
+    const weekEntries = getEmpWeekEntries.all(empId, firstWeekStart, firstWeekEnd);
+    buildTimesheetSheet(db, ws, weekEntries, logoId);
   }
 
   // Note: Monthly Summary sheet removed. `Monthly Breakdown` has been populated above.
@@ -643,7 +657,7 @@ function formatSheet(ws) {
   });
 }
 
-function buildTimesheetSheet(db, ws, entries) {
+function buildTimesheetSheet(db, ws, entries, logoId) {
   ws.columns = [
     { width: 10 }, // Date
     { width: 22 }, // Client Name
@@ -664,6 +678,7 @@ function buildTimesheetSheet(db, ws, entries) {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
     }
   });
+  addLogoToSheet(ws, logoId, 7.2);
 
   const entriesByDate = new Map();
   const dateOrder = [];
