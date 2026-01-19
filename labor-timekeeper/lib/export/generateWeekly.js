@@ -151,7 +151,6 @@ export async function generateWeeklyExports({ db, weekStart }) {
       const dayName = dayObj.toLocaleDateString("en-US", { weekday: "short" });
       const dayNum = String(dayObj.getDate());
       let currentTime = 7.5;
-      let lunchTaken = false;
       let idx = 0;
       for (const entry of dayEntries) {
         const hours = Number(entry.hours);
@@ -164,15 +163,11 @@ export async function generateWeeklyExports({ db, weekStart }) {
         const clientName = type === "PTO" ? "PTO" : (type === "Holiday" ? "Holiday Pay" : entry.customer_name);
         const dateLabel = idx === 0 ? dayName : (idx === 1 ? dayNum : "");
 
-        let timeStart = currentTime;
-        let lunch = "";
-        let timeOut = currentTime + hours;
-        if (!lunchTaken && timeStart <= 12 && timeOut >= 12) {
-          lunch = 0.5;
-          timeOut = timeStart + hours + lunch;
-          lunchTaken = true;
-        }
-        leftRows.push([dateLabel, clientName, round2(timeStart), lunch === "" ? "" : lunch, round2(timeOut), hours, "", "", "", "", ""]);
+        const timeStart = currentTime;
+        const lunch = idx === 0 ? 0.5 : "";
+        const timeOut = timeStart + hours + (lunch === "" ? 0 : lunch);
+
+        leftRows.push([dateLabel, clientName, round2(timeStart), lunch, round2(timeOut), hours, "", "", "", "", ""]);
         currentTime = timeOut;
         idx += 1;
 
