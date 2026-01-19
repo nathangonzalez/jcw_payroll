@@ -168,7 +168,7 @@ export async function generateWeeklyExports({ db, weekStart }) {
         const rate = entry.rate;
 
         let type = entry.type || "Regular";
-        if (entry.holidayName) type = "Holiday";
+        if (entry.holidayName || entry.notes?.toLowerCase().includes("holiday")) type = "Holiday";
         if (entry.notes?.toLowerCase().includes("pto")) type = "PTO";
 
         const clientName = type === "PTO" ? "PTO" : (type === "Holiday" ? "Holiday Pay" : entry.customer_name);
@@ -179,6 +179,10 @@ export async function generateWeeklyExports({ db, weekStart }) {
         const timeOut = timeStart + hours + (lunch === "" ? 0 : lunch);
 
         leftRows.push([dateLabel, clientName, round2(timeStart), lunch, round2(timeOut), hours, "", "", "", "", ""]);
+        if (idx === 0 && dayEntries.length === 1) {
+          // Add date-number row with only hours, matching template layout
+          leftRows.push([dayNum, "", "", "", "", hours, "", "", "", "", ""]);
+        }
         currentTime = timeOut;
         idx += 1;
 

@@ -233,32 +233,37 @@ function ensureSimulationRates() {
 
 function buildStressSampleEntries() {
   const employees = [
-    { name: 'Chris Jacobi', role: 'admin', customers: ['JCW', 'Shop', 'McGill', 'Hall', 'Howard', 'Landy', 'Watkins'] },
-    { name: 'Chris Zavesky', role: 'admin', customers: ['JCW', 'Shop', 'Richer', 'Hall', 'Howard', 'Landy', 'Watkins'] },
-    { name: 'Doug Kinsey', role: 'hourly', customers: ['McGill', 'Hall', 'Howard', 'Landy', 'Shop', 'Ueltschi', 'Watkins'] },
-    { name: 'Jason Green', role: 'hourly', customers: ['Hall', 'Howard', 'Lucas', 'Richer', 'Watkins', 'Landy', 'Shop'] },
-    { name: 'Boban Abbate', role: 'hourly', customers: ['Boyle', 'Campbell', 'Howard', 'JCW', 'Shop', 'McGill', 'Hall'] },
-    { name: 'Sean Matthew', role: 'hourly', customers: ['Landy', 'Watkins', 'Boyle', 'JCW', 'Shop', 'Howard', 'Hall'] },
-    { name: 'Phil Henderson', role: 'hourly', customers: ['Watkins', 'Shop', 'JCW', 'Hall', 'Howard', 'Richer', 'Lucas'] },
-    { name: 'Thomas Brinson', role: 'hourly', customers: ['Landy', 'Watkins', 'Hall', 'Howard', 'JCW', 'Shop', 'Richer'] }
+    { name: 'Chris Jacobi', role: 'admin', customers: ['JCW'] },
+    { name: 'Chris Zavesky', role: 'admin', customers: ['JCW'] },
+    { name: 'Doug Kinsey', role: 'hourly', customers: ['Hall', 'Richer', 'Lucas', 'Howard'] },
+    { name: 'Jason Green', role: 'hourly', customers: ['Hall', 'Richer', 'Lucas', 'Howard'] },
+    { name: 'Boban Abbate', role: 'hourly', customers: ['Boyle', 'Campbell', 'Hall', 'Howard'] },
+    { name: 'Sean Matthew', role: 'hourly', customers: ['Landy', 'Watkins', 'Hall', 'Howard'] },
+    { name: 'Phil Henderson', role: 'hourly', customers: ['Watkins', 'Richer', 'Lucas', 'Howard'] },
+    { name: 'Thomas Brinson', role: 'hourly', customers: ['Landy', 'Watkins', 'Hall', 'Howard'] }
   ];
 
   const entries = [];
-  const dayOffsets = [0, 1, 2, 3, 4, 5, 6];
   for (const emp of employees) {
-    for (const dayOffset of dayOffsets) {
-      let hours = 8;
-      let notes = '';
-      if (emp.role === 'admin') {
-        hours = dayOffset <= 4 ? 8 : 6;
-      } else {
-        if (dayOffset === 5) { hours = 8; notes = 'PTO'; }
-        else if (dayOffset === 6) { hours = 6; }
-        else { hours = 9; }
+    if (emp.role === 'admin') {
+      // Admin template: 8 hours Wed-Fri + Mon-Tue on a single client
+      for (const dayOffset of [0, 1, 2, 5, 6]) {
+        entries.push({ employee: emp.name, customer: emp.customers[0], hours: 8, dayOffset, notes: '' });
       }
-      const customer = emp.customers[dayOffset % emp.customers.length];
-      entries.push({ employee: emp.name, customer, hours, dayOffset, notes });
+      continue;
     }
+
+    const [monClient, tue1, tue2, tue3] = emp.customers;
+    // Hourly template: Wed PTO, Thu Holiday, Fri PTO, Mon 8, Tue split
+    entries.push({ employee: emp.name, customer: monClient, hours: 8, dayOffset: 5, notes: '' });
+    entries.push({ employee: emp.name, customer: 'PTO', hours: 8, dayOffset: 0, notes: 'PTO' });
+    entries.push({ employee: emp.name, customer: 'Holiday Pay', hours: 8, dayOffset: 1, notes: 'Holiday' });
+    entries.push({ employee: emp.name, customer: 'PTO', hours: 8, dayOffset: 2, notes: 'PTO' });
+    // Tuesday split to mirror template time blocks
+    entries.push({ employee: emp.name, customer: tue1, hours: 1.5, dayOffset: 6, notes: '' });
+    entries.push({ employee: emp.name, customer: tue2, hours: 0.5, dayOffset: 6, notes: '' });
+    entries.push({ employee: emp.name, customer: tue1, hours: 2.5, dayOffset: 6, notes: '' });
+    entries.push({ employee: emp.name, customer: tue3, hours: 3.5, dayOffset: 6, notes: '' });
   }
 
   return entries;
