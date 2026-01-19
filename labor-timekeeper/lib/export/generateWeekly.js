@@ -185,10 +185,10 @@ export async function generateWeeklyExports({ db, weekStart }) {
     }
 
     for (const r of leftRows) ws.addRow(r);
-    const desiredTotalRow = 38;
+    const desiredTotalRow = 39; // matches template where Total is on row 39
     while (ws.rowCount < desiredTotalRow - 1) ws.addRow(["", "", "", "", "", "", "", "", "", "", ""]);
 
-    const totalRowIndex = ws.rowCount + 1;
+    const totalRowIndex = desiredTotalRow;
     const totalRow = ["", "", "", "", "Total:", { formula: `SUM(F2:F${totalRowIndex - 1})` }, "", "", "", "", ""];
     ws.addRow(totalRow);
 
@@ -196,7 +196,9 @@ export async function generateWeeklyExports({ db, weekStart }) {
     const summaryRows = [...summaryMap.values()].sort((a, b) => a.name.localeCompare(b.name));
     let rIdx = 2;
     const rateSet = new Set();
+    const summaryTotalRow = 21; // template TOTAL row
     for (const s of summaryRows) {
+      if (rIdx >= summaryTotalRow) break;
       const row = ws.getRow(rIdx);
       row.getCell(8).value = s.name;
       row.getCell(9).value = round2(s.hours);
@@ -205,11 +207,11 @@ export async function generateWeeklyExports({ db, weekStart }) {
       rateSet.add(s.rate);
       rIdx++;
     }
-    const totalSummaryRow = ws.getRow(rIdx);
+    const totalSummaryRow = ws.getRow(summaryTotalRow);
     totalSummaryRow.getCell(8).value = "TOTAL:";
-    totalSummaryRow.getCell(9).value = { formula: `SUM(I2:I${rIdx - 1})` };
+    totalSummaryRow.getCell(9).value = { formula: `SUM(I2:I${summaryTotalRow - 1})` };
     totalSummaryRow.getCell(10).value = rateSet.size === 1 ? [...rateSet][0] : "";
-    totalSummaryRow.getCell(11).value = { formula: `SUM(K2:K${rIdx - 1})` };
+    totalSummaryRow.getCell(11).value = { formula: `SUM(K2:K${summaryTotalRow - 1})` };
 
     ws.getColumn(10).numFmt = '"$"#,##0.00';
     ws.getColumn(11).numFmt = '"$"#,##0.00';
