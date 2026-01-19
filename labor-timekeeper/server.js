@@ -25,7 +25,7 @@ import { ensureEmployees, getEmployeesDBOrDefault } from "./lib/bootstrap.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const EXPORT_DIR = path.join(__dirname, 'exports');
+const EXPORT_DIR = process.env.NODE_ENV === 'production' ? '/tmp/exports' : path.join(__dirname, 'exports');
 const SEED_DIR = path.join(__dirname, 'seed');
 
 // Load secrets from Google Secret Manager in production
