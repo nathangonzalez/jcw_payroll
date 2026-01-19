@@ -110,6 +110,67 @@ test.describe("Labor Timekeeper - Admin Page", () => {
   });
 });
 
+test.describe("Labor Timekeeper - Export Format", () => {
+  test("weekly export matches Jason Green template layout", async ({ request }) => {
+    test.skip(process.env.RUN_EXPORT_COMPARE !== "1", "Set RUN_EXPORT_COMPARE=1 to enable export comparison.");
+
+    const weekStart = process.env.EXPORT_WEEK_START || "2026-01-26";
+    const adminSecret = process.env.ADMIN_SECRET || "7707";
+
+    const seedResp = await request.post(`${BASE}/api/admin/simulate-week`, {
+      headers: { "Content-Type": "application/json", "x-admin-secret": adminSecret },
+      data: { week_start: weekStart, reset: true, submit: true, approve: true }
+    });
+    expect(seedResp.ok()).toBe(true);
+
+    const genResp = await request.get(`${BASE}/api/admin/generate-week?week_start=${encodeURIComponent(weekStart)}`);
+    expect(genResp.ok()).toBe(true);
+    const genData = await genResp.json();
+    const files = genData.files || [];
+    const jason = files.find(f => /Jason_Green/i.test(f.filename)) || files[0];
+    expect(jason).toBeTruthy();
+
+    const month = weekStart.slice(0, 7);
+    const fileUrl = `${BASE}/exports/${month}/${weekStart}/${encodeURIComponent(jason.filename)}`;
+    const fileResp = await request.get(fileUrl);
+    expect(fileResp.ok()).toBe(true);
+    const buffer = await fileResp.body();
+
+    const ExcelJS = require("exceljs");
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buffer);
+
+    expect(wb.worksheets.map(ws => ws.name)).toEqual(["Sheet1", "Sheet2", "Sheet3"]);
+
+    const sheet1 = wb.getWorksheet("Sheet1");
+    const header = [];
+    for (let i = 1; i <= 11; i++) header.push(sheet1.getRow(1).getCell(i).value || "");
+    expect(header).toEqual([
+      "Date", "Client Name", "Time Start", "Lunch", "Time Out", "Hours Per Job", "", "Client", "Hours", "Rate", "Total"
+    ]);
+    expect(sheet1.getRow(39).getCell(5).value).toBe("Total:");
+    expect(sheet1.getRow(39).getCell(6).value.formula).toBe("SUM(F2:F38)");
+    expect(sheet1.getRow(21).getCell(9).value.formula).toBe("SUM(I2:I20)");
+    expect(sheet1.getRow(21).getCell(11).value.formula).toBe("SUM(K2:K20)");
+    expect(sheet1.getRow(2).getCell(11).value.formula).toBe("I2*J2");
+
+    const sheet2 = wb.getWorksheet("Sheet2");
+    expect(sheet2.getCell("A1").value).toBe("OFFICE USE ONLY:");
+    expect(sheet2.getCell("A5").value).toBe("Jason Green");
+    expect(sheet2.getCell("A7").value).toBe("JOB");
+    expect(sheet2.getCell("B7").value).toBe("HOURS");
+    expect(sheet2.getCell("C7").value).toBe("RATE");
+    expect(sheet2.getCell("D7").value).toBe("TOTAL");
+    expect(sheet2.getCell("F7").value).toBe("JOB");
+    expect(sheet2.getCell("G7").value).toBe("HOURS");
+    expect(sheet2.getCell("H7").value).toBe("RATE");
+    expect(sheet2.getCell("I7").value).toBe("TOTAL");
+    expect(sheet2.getCell("A21").value).toBe("HOURS");
+    expect(sheet2.getCell("B21").value).toBe("RATE");
+    expect(sheet2.getCell("C21").value).toBe("TOTAL");
+  });
+});
+
 test.describe("Labor Timekeeper - API Endpoints (No Auth)", () => {
   test("GET /api/customers returns list with addresses", async ({ request }) => {
     const response = await request.get(`${BASE}/api/customers`);

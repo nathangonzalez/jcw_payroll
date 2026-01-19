@@ -212,6 +212,39 @@ function ensureSimulationRates() {
   return { employeesUpdated: updatedEmployees, overridesUpdated: updatedOverrides };
 }
 
+function buildStressSampleEntries() {
+  const employees = [
+    { name: 'Chris Jacobi', role: 'admin', customers: ['JCW', 'Shop', 'McGill', 'Hall', 'Howard', 'Landy', 'Watkins'] },
+    { name: 'Chris Zavesky', role: 'admin', customers: ['JCW', 'Shop', 'Richer', 'Hall', 'Howard', 'Landy', 'Watkins'] },
+    { name: 'Doug Kinsey', role: 'hourly', customers: ['McGill', 'Hall', 'Howard', 'Landy', 'Shop', 'Ueltschi', 'Watkins'] },
+    { name: 'Jason Green', role: 'hourly', customers: ['Hall', 'Howard', 'Lucas', 'Richer', 'Watkins', 'Landy', 'Shop'] },
+    { name: 'Boban Abbate', role: 'hourly', customers: ['Boyle', 'Campbell', 'Howard', 'JCW', 'Shop', 'McGill', 'Hall'] },
+    { name: 'Sean Matthew', role: 'hourly', customers: ['Landy', 'Watkins', 'Boyle', 'JCW', 'Shop', 'Howard', 'Hall'] },
+    { name: 'Phil Henderson', role: 'hourly', customers: ['Watkins', 'Shop', 'JCW', 'Hall', 'Howard', 'Richer', 'Lucas'] },
+    { name: 'Thomas Brinson', role: 'hourly', customers: ['Landy', 'Watkins', 'Hall', 'Howard', 'JCW', 'Shop', 'Richer'] }
+  ];
+
+  const entries = [];
+  const dayOffsets = [0, 1, 2, 3, 4, 5, 6];
+  for (const emp of employees) {
+    for (const dayOffset of dayOffsets) {
+      let hours = 8;
+      let notes = '';
+      if (emp.role === 'admin') {
+        hours = dayOffset <= 4 ? 8 : 6;
+      } else {
+        if (dayOffset === 5) { hours = 8; notes = 'PTO'; }
+        else if (dayOffset === 6) { hours = 6; }
+        else { hours = 9; }
+      }
+      const customer = emp.customers[dayOffset % emp.customers.length];
+      entries.push({ employee: emp.name, customer, hours, dayOffset, notes });
+    }
+  }
+
+  return entries;
+}
+
 /** Health */
 app.get("/api/health", (req, res) => {
   try {
@@ -947,29 +980,7 @@ app.post('/api/admin/simulate-week', (req, res) => {
       return res.status(400).json({ error: 'week_start=YYYY-MM-DD required' });
     }
 
-    // Sample entries adapted from scripts/simulate.js
-    const SAMPLE_ENTRIES = [
-      { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 0 },
-      { employee: 'Chris Jacobi', customer: 'Hall', hours: 8, dayOffset: 1 },
-      { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 2 },
-      { employee: 'Chris Jacobi', customer: 'Bryan', hours: 10, dayOffset: 3 },
-      { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 4 },
-      { employee: 'Chris Z', customer: 'Hall', hours: 9, dayOffset: 0 },
-      { employee: 'Chris Z', customer: 'Bryan', hours: 8, dayOffset: 1 },
-      { employee: 'Chris Z', customer: 'McGill', hours: 7, dayOffset: 2 },
-      { employee: 'Chris Z', customer: 'Hall', hours: 8, dayOffset: 3 },
-      { employee: 'Chris Z', customer: 'Bryan', hours: 10, dayOffset: 4 },
-      { employee: 'Doug Kinsey', customer: 'McGill', hours: 10, dayOffset: 0 },
-      { employee: 'Doug Kinsey', customer: 'Hall', hours: 10, dayOffset: 1 },
-      { employee: 'Doug Kinsey', customer: 'Bryan', hours: 10, dayOffset: 2 },
-      { employee: 'Doug Kinsey', customer: 'McGill', hours: 10, dayOffset: 3 },
-      { employee: 'Doug Kinsey', customer: 'Hall', hours: 8, dayOffset: 4 },
-      { employee: 'Jafid Osorio', customer: 'Bryan', hours: 8, dayOffset: 0 },
-      { employee: 'Jafid Osorio', customer: 'McGill', hours: 8, dayOffset: 1 },
-      { employee: 'Jafid Osorio', customer: 'Hall', hours: 8, dayOffset: 2 },
-      { employee: 'Jafid Osorio', customer: 'Bryan', hours: 8, dayOffset: 3 },
-      { employee: 'Jafid Osorio', customer: 'McGill', hours: 8, dayOffset: 4 }
-    ];
+    const SAMPLE_ENTRIES = buildStressSampleEntries();
 
     ensureSimulationSeedData(SAMPLE_ENTRIES);
 
@@ -1043,8 +1054,9 @@ app.post('/api/admin/simulate-week', (req, res) => {
         if (exists) { skipped++; continue; }
 
         const status = approve ? 'APPROVED' : (submit ? 'SUBMITTED' : 'DRAFT');
+        const notes = entry.notes ? `Seeded sample hours - ${entry.notes}` : 'Seeded sample hours';
         db.prepare(`INSERT INTO time_entries (id, employee_id, customer_id, work_date, hours, notes, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-          .run(id('te_'), emp.id, cust.id, workDateYmd, Number(entry.hours), '', status, now, now);
+          .run(id('te_'), emp.id, cust.id, workDateYmd, Number(entry.hours), notes, status, now, now);
         created++;
       }
     });
@@ -1346,56 +1358,8 @@ app.post('/api/admin/seed-weeks', (req, res) => {
     const results = {};
     for (const wk of weeks) {
       // Reuse simulate-week logic by performing inserts similar to the endpoint
-      const SAMPLE_ENTRIES = [
-        // Admin (no OT) - spread across JCW/Shop + client work
-        { employee: 'Chris Jacobi', customer: 'JCW', hours: 8, dayOffset: 0 },
-        { employee: 'Chris Jacobi', customer: 'Shop', hours: 8, dayOffset: 1 },
-        { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 2 },
-        { employee: 'Chris Jacobi', customer: 'Hall', hours: 8, dayOffset: 3 },
-        { employee: 'Chris Jacobi', customer: 'Howard', hours: 6, dayOffset: 4 },
-        { employee: 'Chris Z', customer: 'JCW', hours: 8, dayOffset: 0 },
-        { employee: 'Chris Z', customer: 'Shop', hours: 8, dayOffset: 1 },
-        { employee: 'Chris Z', customer: 'Richer', hours: 8, dayOffset: 2 },
-        { employee: 'Chris Z', customer: 'Hall', hours: 8, dayOffset: 3 },
-        { employee: 'Chris Z', customer: 'Howard', hours: 6, dayOffset: 4 },
-
-        // Hourly (OT/regular/PTO mix)
-        { employee: 'Doug Kinsey', customer: 'McGill', hours: 10, dayOffset: 0 },
-        { employee: 'Doug Kinsey', customer: 'Hall', hours: 10, dayOffset: 1 },
-        { employee: 'Doug Kinsey', customer: 'Howard', hours: 10, dayOffset: 2 },
-        { employee: 'Doug Kinsey', customer: 'Landy', hours: 10, dayOffset: 3 },
-        { employee: 'Doug Kinsey', customer: 'Shop', hours: 10, dayOffset: 4 },
-
-        { employee: 'Jason Green', customer: 'Hall', hours: 9, dayOffset: 0 },
-        { employee: 'Jason Green', customer: 'Howard', hours: 9, dayOffset: 1 },
-        { employee: 'Jason Green', customer: 'Lucas', hours: 9, dayOffset: 2 },
-        { employee: 'Jason Green', customer: 'Richer', hours: 9, dayOffset: 3 },
-        { employee: 'Jason Green', customer: 'Watkins', hours: 9, dayOffset: 4 },
-
-        { employee: 'Boban Abbate', customer: 'Boyle', hours: 8, dayOffset: 0 },
-        { employee: 'Boban Abbate', customer: 'Campbell', hours: 8, dayOffset: 1 },
-        { employee: 'Boban Abbate', customer: 'Howard', hours: 8, dayOffset: 2 },
-        { employee: 'Boban Abbate', customer: 'JCW', hours: 8, dayOffset: 3 },
-        { employee: 'Boban Abbate', customer: 'Shop', hours: 8, dayOffset: 4 },
-
-        { employee: 'Sean Matthew', customer: 'Landy', hours: 8, dayOffset: 0 },
-        { employee: 'Sean Matthew', customer: 'Watkins', hours: 8, dayOffset: 1 },
-        { employee: 'Sean Matthew', customer: 'Boyle', hours: 8, dayOffset: 2 },
-        { employee: 'Sean Matthew', customer: 'JCW', hours: 8, dayOffset: 3 },
-        { employee: 'Sean Matthew', customer: 'JCW', hours: 8, dayOffset: 4, notes: 'PTO' },
-
-        { employee: 'Phil Henderson', customer: 'Watkins', hours: 8, dayOffset: 0 },
-        { employee: 'Phil Henderson', customer: 'Shop', hours: 8, dayOffset: 1 },
-        { employee: 'Phil Henderson', customer: 'JCW', hours: 8, dayOffset: 2 },
-        { employee: 'Phil Henderson', customer: 'Hall', hours: 8, dayOffset: 3 },
-        { employee: 'Phil Henderson', customer: 'JCW', hours: 8, dayOffset: 4, notes: 'PTO' },
-
-        { employee: 'Thomas Brinson', customer: 'Landy', hours: 9, dayOffset: 0 },
-        { employee: 'Thomas Brinson', customer: 'Landy', hours: 9, dayOffset: 1 },
-        { employee: 'Thomas Brinson', customer: 'Watkins', hours: 9, dayOffset: 2 },
-        { employee: 'Thomas Brinson', customer: 'Hall', hours: 9, dayOffset: 3 },
-        { employee: 'Thomas Brinson', customer: 'JCW', hours: 9, dayOffset: 4 }
-      ];
+      const SAMPLE_ENTRIES = buildStressSampleEntries();
+      ensureSimulationSeedData(SAMPLE_ENTRIES);
 
       // load employees/customers maps
       const employees = db.prepare('SELECT id, name, aliases_json, role FROM employees').all();
@@ -1432,8 +1396,9 @@ app.post('/api/admin/seed-weeks', (req, res) => {
           const [y,m,d] = sy.split('-').map(Number);
           const workDate = new Date(y, m-1, d + entry.dayOffset);
           const workDateYmd = `${workDate.getFullYear()}-${String(workDate.getMonth()+1).padStart(2,'0')}-${String(workDate.getDate()).padStart(2,'0')}`;
+          const notes = entry.notes ? `Seeded sample hours - ${entry.notes}` : 'Seeded sample hours';
           db.prepare(`INSERT INTO time_entries (id, employee_id, customer_id, work_date, hours, notes, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-            .run(id('te_'), emp.id, cust.id, workDateYmd, Number(entry.hours), '', 'DRAFT', nowTs, nowTs);
+            .run(id('te_'), emp.id, cust.id, workDateYmd, Number(entry.hours), notes, 'DRAFT', nowTs, nowTs);
           created++;
         }
       });
@@ -1474,30 +1439,13 @@ app.post('/api/admin/simulate-month', async (req, res) => {
     }
 
     const ratesSeeded = ensureSimulationRates();
+    const SAMPLE_ENTRIES = buildStressSampleEntries();
+    ensureSimulationSeedData(SAMPLE_ENTRIES);
+
     const results = {};
     const missing = [];
     for (const wk of weeks) {
       // call simulate-week logic by constructing body and reusing core insertion code (reset/submit/approve per week)
-      // We'll reuse the SAMPLE_ENTRIES pattern from simulate-week
-      const SAMPLE_ENTRIES = [
-        { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 0 },
-        { employee: 'Chris Jacobi', customer: 'Hall', hours: 8, dayOffset: 1 },
-        { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 2 },
-        { employee: 'Chris Jacobi', customer: 'Bryan', hours: 10, dayOffset: 3 },
-        { employee: 'Chris Jacobi', customer: 'McGill', hours: 8, dayOffset: 4 },
-        { employee: 'Chris Z', customer: 'Hall', hours: 9, dayOffset: 0 },
-        { employee: 'Chris Z', customer: 'Bryan', hours: 8, dayOffset: 1 },
-        { employee: 'Chris Z', customer: 'McGill', hours: 7, dayOffset: 2 },
-        { employee: 'Chris Z', customer: 'Hall', hours: 8, dayOffset: 3 },
-        { employee: 'Chris Z', customer: 'Bryan', hours: 10, dayOffset: 4 },
-        { employee: 'Doug Kinsey', customer: 'McGill', hours: 10, dayOffset: 0 },
-        { employee: 'Doug Kinsey', customer: 'Hall', hours: 10, dayOffset: 1 },
-        { employee: 'Doug Kinsey', customer: 'Bryan', hours: 10, dayOffset: 2 },
-        { employee: 'Doug Kinsey', customer: 'McGill', hours: 10, dayOffset: 3 },
-        { employee: 'Doug Kinsey', customer: 'Hall', hours: 8, dayOffset: 4 }
-      ];
-
-      ensureSimulationSeedData(SAMPLE_ENTRIES);
 
       // load employees/customers maps
       const employees = db.prepare('SELECT id, name, aliases_json, role FROM employees').all();
