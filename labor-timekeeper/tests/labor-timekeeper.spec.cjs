@@ -99,9 +99,8 @@ test.describe("Labor Timekeeper - Admin Page", () => {
     await expect(page.locator("h1")).toContainText("Admin");
   });
 
-  test("admin page shows pipeline buttons", async ({ page }) => {
+  test("admin page shows report button", async ({ page }) => {
     await page.click("#toggleDevBtn");
-    await expect(page.locator("#genWeekBtn")).toBeVisible();
     await expect(page.locator("#genMonthBtn")).toBeVisible();
   });
 });

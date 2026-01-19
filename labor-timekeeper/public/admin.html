@@ -49,7 +49,7 @@
 
       <hr/>
 
-      <h2>📊 Payroll Reports</h2>
+      <h2>📊 Payroll Report</h2>
       <div class="row">
         <div class="col">
           <label class="small muted">Payroll Week</label>
@@ -61,8 +61,7 @@
         </div>
       </div>
       <div class="row" style="margin-top:12px; gap:8px;">
-        <button id="genWeekBtn" class="primary">⬇️ Weekly Report (per Employee)</button>
-        <button id="genMonthBtn" class="primary">⬇️ Monthly Breakdown</button>
+        <button id="genMonthBtn" class="primary">⬇️ Monthly Report</button>
       </div>
       <div id="devControls">
           <div class="row" style="margin-top:12px; gap:8px;">
@@ -155,7 +154,6 @@ async function init(){
   el('approveBtn').onclick = approveSelected;
 
   // Report download buttons
-  el('genWeekBtn').onclick = downloadWeekly;
   el('genMonthBtn').onclick = downloadMonthly;
   const seedBtn = el('seedWeeksBtn'); if (seedBtn) seedBtn.onclick = seedSampleWeeks;
   el('previewReconcileBtn').onclick = previewReconcile;
@@ -227,37 +225,6 @@ async function seedSampleWeeks(){
 }
 
 // Report download functions
-async function downloadWeekly() {
-  const week_start = CURRENT_WEEK_START;
-  if (!week_start) { alert('Missing current week'); return; }
-  try {
-    showPipelineResult('Generating weekly exports...');
-    const result = await api(`/api/admin/generate-week?week_start=${encodeURIComponent(week_start)}`);
-    
-    if (result.files && result.files.length > 0) {
-      const totals = result.totals || {};
-      const output = [
-        `✅ Weekly Export Complete`,
-        `Week: ${result.weekStart}`,
-        ``,
-        `Files Generated (${result.files.length}):`,
-        ...result.files.map(f => `  • ${f.filename}: ${f.hours}hrs ($${f.amount})`),
-        ``,
-        `Totals: ${totals.totalHours} hours — $${totals.totalAmount}`,
-        `  • Hourly: $${totals.hourlyAmount || 0}`,
-        `  • Admin: $${totals.adminAmount || 0}`,
-        ``,
-        `Files saved to: ${result.outputDir}`,
-      ].join('\n');
-      showPipelineResult(output);
-    } else {
-      showPipelineResult('No approved entries found for this week.');
-    }
-  } catch (err) {
-    showPipelineResult(`❌ Error: ${err.message}`);
-  }
-}
-
 async function downloadMonthly() {
   const month = CURRENT_MONTH;
   if (!month) { alert('Missing current month'); return; }
