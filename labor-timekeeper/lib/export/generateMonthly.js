@@ -142,9 +142,11 @@ export async function generateMonthlyExport({ db, month }) {
   // Create a sheet for each week using the weekly sheet builder
   // Use reverse chronological order so latest week appears first
   const weeksDesc = [...sortedWeeks].reverse();
+  const currentWeekStart = weekStartYMD(new Date());
   const firstWeekStart = sortedWeeks[0];
+  const weekStartForSheets = (currentWeekStart >= monthStart && currentWeekStart < nextMonth) ? currentWeekStart : firstWeekStart;
   const firstWeekEnd = (() => {
-    const d = ymdToDate(firstWeekStart);
+    const d = ymdToDate(weekStartForSheets);
     d.setDate(d.getDate() + 6);
     return formatYmd(d);
   })();
@@ -752,7 +754,7 @@ function buildTimesheetSheet(db, ws, entries, logoId) {
     ws.addRow(["", "", "", "", "", hours, "", "", "", "", ""]);
     fillerIdx += 1;
   }
-  ws.addRow(["", "", "", "", "Total:", round2(empTotalHours), "", "", "", "", ""]);
+  ws.addRow(["", "", "", "", "Total:", { formula: `SUM(F2:F${desiredTotalRow - 1})` }, "", "", "", "", ""]);
 
   const preferredOrder = ["Hall", "Howard", "Lucas", "Richer", "", "PTO ", "Holiday Pay"];
   const singleRate = summaryMap.size ? (() => {
@@ -788,7 +790,7 @@ function buildTimesheetSheet(db, ws, entries, logoId) {
     if (s.name) {
       row.getCell(9).value = round2(s.hours);
       row.getCell(10).value = s.rate;
-      row.getCell(11).value = round2(s.hours * s.rate);
+      row.getCell(11).value = { formula: `I${rIdx}*J${rIdx}` };
       totalSummaryHours += Number(s.hours || 0);
       totalSummaryAmount += round2(Number(s.hours || 0) * Number(s.rate || 0));
       rateSet.add(s.rate);
@@ -809,9 +811,9 @@ function buildTimesheetSheet(db, ws, entries, logoId) {
   }
   const totalSummaryRow = ws.getRow(summaryTotalRow);
   totalSummaryRow.getCell(8).value = "TOTAL:";
-  totalSummaryRow.getCell(9).value = round2(totalSummaryHours);
+  totalSummaryRow.getCell(9).value = { formula: `SUM(I2:I${summaryTotalRow - 1})` };
   totalSummaryRow.getCell(10).value = singleRate;
-  totalSummaryRow.getCell(11).value = round2(totalSummaryAmount);
+  totalSummaryRow.getCell(11).value = { formula: `SUM(K2:K${summaryTotalRow - 1})` };
 
   ws.getColumn(10).numFmt = '"$"#,##0.00';
   ws.getColumn(11).numFmt = '"$"#,##0.00';

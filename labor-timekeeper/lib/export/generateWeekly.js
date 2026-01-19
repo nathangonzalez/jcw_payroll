@@ -218,7 +218,7 @@ export async function generateWeeklyExports({ db, weekStart }) {
     }
 
     const totalRowIndex = desiredTotalRow;
-    const totalRow = ["", "", "", "", "Total:", round2(empTotalHours), "", "", "", "", ""];
+    const totalRow = ["", "", "", "", "Total:", { formula: `SUM(F2:F${totalRowIndex - 1})` }, "", "", "", "", ""];
     ws.addRow(totalRow);
 
     // Right panel summary (client totals)
@@ -253,7 +253,7 @@ export async function generateWeeklyExports({ db, weekStart }) {
       if (s.name) {
         row.getCell(9).value = round2(s.hours);
         row.getCell(10).value = s.rate;
-        row.getCell(11).value = round2(s.hours * s.rate);
+        row.getCell(11).value = { formula: `I${rIdx}*J${rIdx}` };
         totalSummaryHours += Number(s.hours || 0);
         totalSummaryAmount += round2(Number(s.hours || 0) * Number(s.rate || 0));
         rateSet.add(s.rate);
@@ -274,9 +274,9 @@ export async function generateWeeklyExports({ db, weekStart }) {
     }
     const totalSummaryRow = ws.getRow(summaryTotalRow);
     totalSummaryRow.getCell(8).value = "TOTAL:";
-    totalSummaryRow.getCell(9).value = round2(totalSummaryHours);
+    totalSummaryRow.getCell(9).value = { formula: `SUM(I2:I${summaryTotalRow - 1})` };
     totalSummaryRow.getCell(10).value = singleRate;
-    totalSummaryRow.getCell(11).value = round2(totalSummaryAmount);
+    totalSummaryRow.getCell(11).value = { formula: `SUM(K2:K${summaryTotalRow - 1})` };
 
     ws.getColumn(10).numFmt = '"$"#,##0.00';
     ws.getColumn(11).numFmt = '"$"#,##0.00';
