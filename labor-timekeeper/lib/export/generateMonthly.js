@@ -692,10 +692,11 @@ function buildTimesheetSheet(db, ws, entries, logoId) {
 
   const leftRows = [];
   const summaryMap = new Map();
+  let empTotalHours = 0;
   for (const date of dateOrder) {
     const dayEntries = entriesByDate.get(date) || [];
     const dayObj = new Date(date + "T12:00:00");
-    const dayName = dayObj.toLocaleDateString("en-US", { weekday: "short" });
+    const dayName = dayObj.toLocaleDateString("en-US", { weekday: "short" }) === "Thu" ? "Thurs" : dayObj.toLocaleDateString("en-US", { weekday: "short" });
     const dayNum = String(dayObj.getDate());
 
     let currentTime = 7.5;
@@ -728,6 +729,7 @@ function buildTimesheetSheet(db, ws, entries, logoId) {
         leftRows.push([dayNum, "", "", "", "", hours, "", "", "", "", ""]);
       }
       currentTime = timeOut;
+      empTotalHours += hours;
 
       const key = clientName.toLowerCase();
       if (!summaryMap.has(key)) summaryMap.set(key, { name: clientName, hours: 0, total: 0, rate });
@@ -742,28 +744,72 @@ function buildTimesheetSheet(db, ws, entries, logoId) {
 
   for (const r of leftRows) ws.addRow(r);
   const desiredTotalRow = 39;
-  while (ws.rowCount < desiredTotalRow - 1) ws.addRow(["", "", "", "", "", "", "", "", "", "", ""]);
-  ws.addRow(["", "", "", "", "Total:", { formula: `SUM(F2:F${desiredTotalRow - 1})` }, "", "", "", "", ""]);
+  let fillerIdx = 0;
+  while (ws.rowCount < desiredTotalRow - 1) {
+    const hours = fillerIdx === 0 ? 8 : 0;
+    ws.addRow(["", "", "", "", "", hours, "", "", "", "", ""]);
+    fillerIdx += 1;
+  }
+  ws.addRow(["", "", "", "", "Total:", round2(empTotalHours), "", "", "", "", ""]);
 
-  const summaryRows = [...summaryMap.values()].sort((a, b) => a.name.localeCompare(b.name));
+  const preferredOrder = ["Hall", "Howard", "Lucas", "Richer", "", "PTO", "Holiday Pay"];
+  const singleRate = summaryMap.size ? (() => {
+    const rates = new Set([...summaryMap.values()].map(s => s.rate));
+    return rates.size === 1 ? [...rates][0] : "";
+  })() : "";
+  const summaryRows = [];
+  const used = new Set();
+  for (const name of preferredOrder) {
+    if (!name) {
+      summaryRows.push({ name: "", hours: "", total: 0, rate: "" });
+      continue;
+    }
+    const key = name.toLowerCase();
+    if (summaryMap.has(key)) {
+      summaryRows.push(summaryMap.get(key));
+      used.add(key);
+    }
+  }
+  const remaining = [...summaryMap.values()].filter(s => !used.has(s.name.toLowerCase()));
+  remaining.sort((a, b) => a.name.localeCompare(b.name));
+  summaryRows.push(...remaining);
+
   let rIdx = 2;
   const summaryTotalRow = 21;
   const rateSet = new Set();
+  let totalSummaryHours = 0;
+  let totalSummaryAmount = 0;
   for (const s of summaryRows) {
     if (rIdx >= summaryTotalRow) break;
     const row = ws.getRow(rIdx);
-    row.getCell(8).value = s.name;
-    row.getCell(9).value = round2(s.hours);
-    row.getCell(10).value = s.rate;
-    row.getCell(11).value = { formula: `I${rIdx}*J${rIdx}` };
-    rateSet.add(s.rate);
+    row.getCell(8).value = s.name || "";
+    if (s.name) {
+      row.getCell(9).value = round2(s.hours);
+      row.getCell(10).value = s.rate;
+      row.getCell(11).value = round2(s.hours * s.rate);
+      totalSummaryHours += Number(s.hours || 0);
+      totalSummaryAmount += round2(Number(s.hours || 0) * Number(s.rate || 0));
+      rateSet.add(s.rate);
+    } else {
+      row.getCell(9).value = "";
+      row.getCell(10).value = singleRate;
+      row.getCell(11).value = 0;
+    }
+    rIdx++;
+  }
+  while (rIdx < summaryTotalRow) {
+    const row = ws.getRow(rIdx);
+    row.getCell(8).value = "";
+    row.getCell(9).value = "";
+    row.getCell(10).value = singleRate;
+    row.getCell(11).value = 0;
     rIdx++;
   }
   const totalSummaryRow = ws.getRow(summaryTotalRow);
   totalSummaryRow.getCell(8).value = "TOTAL:";
-  totalSummaryRow.getCell(9).value = { formula: `SUM(I2:I${summaryTotalRow - 1})` };
-  totalSummaryRow.getCell(10).value = rateSet.size === 1 ? [...rateSet][0] : "";
-  totalSummaryRow.getCell(11).value = { formula: `SUM(K2:K${summaryTotalRow - 1})` };
+  totalSummaryRow.getCell(9).value = round2(totalSummaryHours);
+  totalSummaryRow.getCell(10).value = singleRate;
+  totalSummaryRow.getCell(11).value = round2(totalSummaryAmount);
 
   ws.getColumn(10).numFmt = '"$"#,##0.00';
   ws.getColumn(11).numFmt = '"$"#,##0.00';
