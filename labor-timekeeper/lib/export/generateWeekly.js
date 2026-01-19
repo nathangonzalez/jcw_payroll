@@ -192,7 +192,6 @@ export async function generateWeeklyExports({ db, weekStart }) {
         agg.total += total;
         agg.rate = rate;
 
-        first = false;
       }
     }
 
