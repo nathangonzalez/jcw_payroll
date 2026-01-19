@@ -21,7 +21,6 @@ import ExcelJS from "exceljs";
 import { fileURLToPath } from "url";
 import { getBillRate } from "../billing.js";
 import { getEmployeeCategory } from "../classification.js";
-import { isHoliday } from "../holidays.js";
 import { weekStartYMD, ymdToDate } from "../time.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -93,7 +92,7 @@ export async function generateMonthlyExport({ db, month }) {
     JOIN customers c ON c.id = te.customer_id
     WHERE te.work_date >= ? AND te.work_date < ?
       AND (te.status IS NULL OR te.status != 'DELETED')
-    ORDER BY te.work_date ASC, c.name ASC, e.name ASC
+    ORDER BY te.work_date ASC, te.created_at ASC
   `).all(monthStart, nextMonth);
 
   // Normalize DB rows to the shape expected by sheet builders and group by week (Sunday start)
@@ -143,6 +142,7 @@ export async function generateMonthlyExport({ db, month }) {
   // Create a sheet for each week using the weekly sheet builder
   // Use reverse chronological order so latest week appears first
   const weeksDesc = [...sortedWeeks].reverse();
+  const firstWeekStart = sortedWeeks[0];
   for (const weekSunday of weeksDesc) {
     const weekEntries = byWeek.get(weekSunday);
     const sheetName = formatWeekName(weekSunday);
@@ -228,7 +228,7 @@ export async function generateMonthlyExport({ db, month }) {
   monthlySheet.getColumn(11).numFmt = '"$"#,##0.00';
   try { formatSheet(monthlySheet); } catch (e) {}
 
-  // Add one sheet per employee containing all their entries for the month
+  // Add one sheet per employee in weekly timesheet format (first payroll week of the month)
   const byEmployee = new Map();
   for (const r of entries) {
     if (!byEmployee.has(r.emp_id)) byEmployee.set(r.emp_id, { id: r.emp_id, name: r.employee_name, entries: [] });
@@ -246,40 +246,9 @@ export async function generateMonthlyExport({ db, month }) {
     }
     const ws = workbook.addWorksheet(sheetName);
     addLogoToSheet(ws, logoId, 7.2);
-    // Columns: Date, Customer, Hours, Type, Rate, Total, Notes
-    ws.columns = [
-      { header: 'Date', key: 'date', width: 12 },
-      { header: 'Customer', key: 'cust', width: 25 },
-      { header: 'Hours', key: 'hours', width: 8 },
-      { header: 'Type', key: 'type', width: 10 },
-      { header: 'Rate', key: 'rate', width: 10 },
-      { header: 'Total', key: 'total', width: 12 },
-      { header: 'Notes', key: 'notes', width: 30 }
-    ];
-    ws.getRow(1).font = { bold: true };
 
-    let empTotal = 0;
-    // Sort entries by date
-    empBucket.entries.sort((a,b) => a.work_date.localeCompare(b.work_date));
-    for (const e of empBucket.entries) {
-      const rate = getBillRate(db, e.emp_id, e.cust_id);
-      const hours = Number(e.hours || 0);
-      const isHol = isHoliday ? isHoliday(e.work_date) : null;
-      let type = '';
-      if (isHol && isHol.name) type = 'Holiday';
-      if (e.notes && e.notes.toLowerCase().includes('pto')) type = 'PTO';
-      const total = round2(hours * rate);
-      ws.addRow([e.work_date, e.customer_name, hours, type || 'Regular', rate, total, e.notes || '']);
-      empTotal += total;
-    }
-    const subtotalRow = ws.addRow([]);
-    const sub = ws.addRow(["", "SUBTOTAL", "", "", "", round2(empTotal)]);
-    sub.font = { bold: true };
-    sub.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFF2CC' } };
-    // Format currency
-    ws.getColumn('rate').numFmt = '"$"#,##0.00';
-    ws.getColumn('total').numFmt = '"$"#,##0.00';
-    try { formatSheet(ws); } catch (e) {}
+    const weekEntries = empBucket.entries.filter(e => getPayrollWeekStart(e.work_date) === firstWeekStart);
+    buildTimesheetSheet(db, ws, weekEntries);
   }
 
   // Note: Monthly Summary sheet removed. `Monthly Breakdown` has been populated above.
@@ -672,4 +641,116 @@ function formatSheet(ws) {
     const max = colMax[idx + 1] || 10;
     col.width = Math.min(50, Math.max(12, Math.ceil(max + 2)));
   });
+}
+
+function buildTimesheetSheet(db, ws, entries) {
+  ws.columns = [
+    { width: 10 }, // Date
+    { width: 22 }, // Client Name
+    { width: 12 }, // Time Start
+    { width: 10 }, // Lunch
+    { width: 12 }, // Time Out
+    { width: 14 }, // Hours Per Job
+    { width: 3 },  // spacer
+    { width: 22 }, // Client
+    { width: 10 }, // Hours
+    { width: 10 }, // Rate
+    { width: 12 }, // Total
+  ];
+  const headerRow = ws.addRow(["Date", "Client Name", "Time Start", "Lunch", "Time Out", "Hours Per Job", "", "Client", "Hours", "Rate", "Total"]);
+  headerRow.font = { bold: true };
+  headerRow.eachCell((cell, colNum) => {
+    if ([1,2,3,4,5,6,8,9,10,11].includes(colNum)) {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
+    }
+  });
+
+  const entriesByDate = new Map();
+  const dateOrder = [];
+  for (const e of entries) {
+    if (!entriesByDate.has(e.work_date)) {
+      entriesByDate.set(e.work_date, []);
+      dateOrder.push(e.work_date);
+    }
+    entriesByDate.get(e.work_date).push(e);
+  }
+
+  const leftRows = [];
+  const summaryMap = new Map();
+  for (const date of dateOrder) {
+    const dayEntries = entriesByDate.get(date) || [];
+    const dayObj = new Date(date + "T12:00:00");
+    const dayName = dayObj.toLocaleDateString("en-US", { weekday: "short" });
+    const dayNum = String(dayObj.getDate());
+
+    let currentTime = 7.5;
+    let probeTime = 7.5;
+    let lunchIndex = -1;
+    for (let i = 0; i < dayEntries.length; i += 1) {
+      if (probeTime >= 12) {
+        lunchIndex = i;
+        break;
+      }
+      probeTime += Number(dayEntries[i].hours || 0);
+    }
+    if (lunchIndex === -1) lunchIndex = 0;
+
+    let idx = 0;
+    for (const entry of dayEntries) {
+      const hours = Number(entry.hours);
+      const rate = getBillRate(db, entry.emp_id, entry.cust_id);
+      let type = "Regular";
+      if (entry.notes?.toLowerCase().includes("holiday")) type = "Holiday";
+      if (entry.notes?.toLowerCase().includes("pto")) type = "PTO";
+      const clientName = type === "PTO" ? "PTO" : (type === "Holiday" ? "Holiday Pay" : entry.customer_name);
+
+      const dateLabel = idx === 0 ? dayName : (idx === 1 ? dayNum : "");
+      const timeStart = currentTime;
+      const lunch = idx === lunchIndex ? 0.5 : "";
+      const timeOut = timeStart + hours + (lunch === "" ? 0 : lunch);
+      leftRows.push([dateLabel, clientName, round2(timeStart), lunch, round2(timeOut), hours, "", "", "", "", ""]);
+      if (idx === 0 && dayEntries.length === 1) {
+        leftRows.push([dayNum, "", "", "", "", hours, "", "", "", "", ""]);
+      }
+      currentTime = timeOut;
+
+      const key = clientName.toLowerCase();
+      if (!summaryMap.has(key)) summaryMap.set(key, { name: clientName, hours: 0, total: 0, rate });
+      const agg = summaryMap.get(key);
+      agg.hours += hours;
+      agg.total += round2(hours * rate);
+      agg.rate = rate;
+
+      idx += 1;
+    }
+  }
+
+  for (const r of leftRows) ws.addRow(r);
+  const desiredTotalRow = 39;
+  while (ws.rowCount < desiredTotalRow - 1) ws.addRow(["", "", "", "", "", "", "", "", "", "", ""]);
+  ws.addRow(["", "", "", "", "Total:", { formula: `SUM(F2:F${desiredTotalRow - 1})` }, "", "", "", "", ""]);
+
+  const summaryRows = [...summaryMap.values()].sort((a, b) => a.name.localeCompare(b.name));
+  let rIdx = 2;
+  const summaryTotalRow = 21;
+  const rateSet = new Set();
+  for (const s of summaryRows) {
+    if (rIdx >= summaryTotalRow) break;
+    const row = ws.getRow(rIdx);
+    row.getCell(8).value = s.name;
+    row.getCell(9).value = round2(s.hours);
+    row.getCell(10).value = s.rate;
+    row.getCell(11).value = { formula: `I${rIdx}*J${rIdx}` };
+    rateSet.add(s.rate);
+    rIdx++;
+  }
+  const totalSummaryRow = ws.getRow(summaryTotalRow);
+  totalSummaryRow.getCell(8).value = "TOTAL:";
+  totalSummaryRow.getCell(9).value = { formula: `SUM(I2:I${summaryTotalRow - 1})` };
+  totalSummaryRow.getCell(10).value = rateSet.size === 1 ? [...rateSet][0] : "";
+  totalSummaryRow.getCell(11).value = { formula: `SUM(K2:K${summaryTotalRow - 1})` };
+
+  ws.getColumn(10).numFmt = '"$"#,##0.00';
+  ws.getColumn(11).numFmt = '"$"#,##0.00';
+  try { formatSheet(ws); } catch (e) {}
 }
