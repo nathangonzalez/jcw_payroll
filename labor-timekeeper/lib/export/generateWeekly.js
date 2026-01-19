@@ -151,6 +151,17 @@ export async function generateWeeklyExports({ db, weekStart }) {
       const dayName = dayObj.toLocaleDateString("en-US", { weekday: "short" });
       const dayNum = String(dayObj.getDate());
       let currentTime = 7.5;
+      // Pre-calc lunch row: first row that would start at/after noon (without lunch).
+      let probeTime = 7.5;
+      let lunchIndex = -1;
+      for (let i = 0; i < dayEntries.length; i += 1) {
+        if (probeTime >= 12) {
+          lunchIndex = i;
+          break;
+        }
+        probeTime += Number(dayEntries[i].hours || 0);
+      }
+      if (lunchIndex === -1) lunchIndex = 0;
       let idx = 0;
       for (const entry of dayEntries) {
         const hours = Number(entry.hours);
@@ -164,7 +175,7 @@ export async function generateWeeklyExports({ db, weekStart }) {
         const dateLabel = idx === 0 ? dayName : (idx === 1 ? dayNum : "");
 
         const timeStart = currentTime;
-        const lunch = idx === 0 ? 0.5 : "";
+        const lunch = idx === lunchIndex ? 0.5 : "";
         const timeOut = timeStart + hours + (lunch === "" ? 0 : lunch);
 
         leftRows.push([dateLabel, clientName, round2(timeStart), lunch, round2(timeOut), hours, "", "", "", "", ""]);
