@@ -15,7 +15,10 @@ import { isHoliday } from "../holidays.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const LOGO_PATH = path.resolve(__dirname, "..", "..", "public", "icon-192.png");
+const LOGO_PATHS = [
+  path.resolve(__dirname, "..", "..", "public", "icon-192.png"),
+  path.resolve(process.cwd(), "public", "icon-192.png")
+];
 
 /**
  * Generate weekly XLSX files for all employees with approved entries
@@ -316,10 +319,20 @@ function round2(n) {
 
 function addLogoImage(workbook) {
   try {
-    if (!fs.existsSync(LOGO_PATH)) return null;
-    const buffer = fs.readFileSync(LOGO_PATH);
+    let buffer = null;
+    for (const p of LOGO_PATHS) {
+      if (fs.existsSync(p)) {
+        buffer = fs.readFileSync(p);
+        break;
+      }
+    }
+    if (!buffer) {
+      console.warn('[export] logo file not found');
+      return null;
+    }
     return workbook.addImage({ buffer, extension: "png" });
   } catch (e) {
+    console.warn('[export] failed to load logo', e?.message || e);
     return null;
   }
 }
