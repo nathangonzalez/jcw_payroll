@@ -148,7 +148,8 @@ export async function generateWeeklyExports({ db, weekStart }) {
     for (const date of sortedDates) {
       const dayEntries = entriesByDate.get(date);
       const dayObj = new Date(date + "T12:00:00");
-      const dayName = dayObj.toLocaleDateString("en-US", { weekday: "short" }) === "Thu" ? "Thurs" : dayObj.toLocaleDateString("en-US", { weekday: "short" });
+      const rawDay = dayObj.toLocaleDateString("en-US", { weekday: "short" });
+      const dayName = rawDay === "Thu" ? "Thurs" : (rawDay === "Tue" ? "Tues" : rawDay);
       const dayNum = String(dayObj.getDate());
       let currentTime = 7.5;
       // Pre-calc lunch row: first row that would start at/after noon (without lunch).
@@ -194,12 +195,14 @@ export async function generateWeeklyExports({ db, weekStart }) {
         else empRegularHours += hours;
         empTotalAmount += total;
 
-        const key = clientName.toLowerCase();
+        const summaryName = clientName === "PTO" ? "PTO " : clientName;
+        const key = summaryName.toLowerCase();
         if (!summaryMap.has(key)) summaryMap.set(key, { name: clientName, hours: 0, total: 0, rate });
         const agg = summaryMap.get(key);
         agg.hours += hours;
         agg.total += total;
         agg.rate = rate;
+        agg.name = summaryName;
 
       }
     }
@@ -219,7 +222,7 @@ export async function generateWeeklyExports({ db, weekStart }) {
     ws.addRow(totalRow);
 
     // Right panel summary (client totals)
-    const preferredOrder = ["Hall", "Howard", "Lucas", "Richer", "", "PTO", "Holiday Pay"];
+    const preferredOrder = ["Hall", "Howard", "Lucas", "Richer", "", "PTO ", "Holiday Pay"];
     const singleRate = rateSet.size === 1 ? [...rateSet][0] : "";
     const summaryRows = [];
     const used = new Set();

@@ -696,7 +696,8 @@ function buildTimesheetSheet(db, ws, entries, logoId) {
   for (const date of dateOrder) {
     const dayEntries = entriesByDate.get(date) || [];
     const dayObj = new Date(date + "T12:00:00");
-    const dayName = dayObj.toLocaleDateString("en-US", { weekday: "short" }) === "Thu" ? "Thurs" : dayObj.toLocaleDateString("en-US", { weekday: "short" });
+    const rawDay = dayObj.toLocaleDateString("en-US", { weekday: "short" });
+    const dayName = rawDay === "Thu" ? "Thurs" : (rawDay === "Tue" ? "Tues" : rawDay);
     const dayNum = String(dayObj.getDate());
 
     let currentTime = 7.5;
@@ -731,8 +732,9 @@ function buildTimesheetSheet(db, ws, entries, logoId) {
       currentTime = timeOut;
       empTotalHours += hours;
 
-      const key = clientName.toLowerCase();
-      if (!summaryMap.has(key)) summaryMap.set(key, { name: clientName, hours: 0, total: 0, rate });
+      const summaryName = clientName === "PTO" ? "PTO " : clientName;
+      const key = summaryName.toLowerCase();
+      if (!summaryMap.has(key)) summaryMap.set(key, { name: summaryName, hours: 0, total: 0, rate });
       const agg = summaryMap.get(key);
       agg.hours += hours;
       agg.total += round2(hours * rate);
@@ -752,7 +754,7 @@ function buildTimesheetSheet(db, ws, entries, logoId) {
   }
   ws.addRow(["", "", "", "", "Total:", round2(empTotalHours), "", "", "", "", ""]);
 
-  const preferredOrder = ["Hall", "Howard", "Lucas", "Richer", "", "PTO", "Holiday Pay"];
+  const preferredOrder = ["Hall", "Howard", "Lucas", "Richer", "", "PTO ", "Holiday Pay"];
   const singleRate = summaryMap.size ? (() => {
     const rates = new Set([...summaryMap.values()].map(s => s.rate));
     return rates.size === 1 ? [...rates][0] : "";
