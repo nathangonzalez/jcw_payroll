@@ -75,7 +75,10 @@
   {"name":"Vincent","address":"145 Sago Palm Rd."},
   {"name":"Walsh","address":"21 Dove Shell Ln."},
   {"name":"Ward","address":"115 Sago Palm Rd."},
+  {"name":"Watkins","address":""},
   {"name":"Welles","address":"2328 Ocean Dr."},
   {"name":"Winn","address":"300 Sea Oak Dr."},
-  {"name":"Zygmunt","address":"4860 Harbor Drive S #201"}
+  {"name":"Zygmunt","address":"4860 Harbor Drive S #201"},
+  {"name":"JCW","address":"7707 US - UNIT 10"},
+  {"name":"Shop","address":"7707 US - UNIT 10"}
 ]

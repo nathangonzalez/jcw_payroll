@@ -113,20 +113,39 @@ function uniqueNamesFromSamples(samples, key) {
 }
 
 function ensureSimulationCustomers(sampleEntries) {
-  const count = db.prepare('SELECT COUNT(*) as n FROM customers').get().n || 0;
-  if (count > 0) return;
-  let customers = readSeedJson('customers.json');
-  if (!customers || customers.length === 0) {
-    customers = uniqueNamesFromSamples(sampleEntries, 'customer').map(name => ({ name, address: '' }));
+  const existingRows = db.prepare('SELECT name FROM customers').all();
+  const existing = new Set(existingRows.map(r => String(r.name || '').toLowerCase()));
+  const seedCustomers = readSeedJson('customers.json') || [];
+  const seedMap = new Map();
+  for (const c of seedCustomers) {
+    const name = typeof c === 'string' ? c : c.name;
+    if (!name) continue;
+    seedMap.set(String(name).toLowerCase(), typeof c === 'string' ? '' : (c.address || ''));
   }
-  if (!customers || customers.length === 0) return;
+
+  const sampleNames = uniqueNamesFromSamples(sampleEntries, 'customer');
+  let customersToInsert = [];
+  if (existing.size === 0) {
+    if (seedCustomers.length > 0) customersToInsert = seedCustomers;
+    else customersToInsert = sampleNames.map(name => ({ name, address: '' }));
+  } else {
+    for (const name of sampleNames) {
+      if (!name) continue;
+      if (existing.has(String(name).toLowerCase())) continue;
+      const address = seedMap.get(String(name).toLowerCase()) || '';
+      customersToInsert.push({ name, address });
+    }
+  }
+
+  if (customersToInsert.length === 0) return;
   const now = new Date().toISOString();
   const insert = db.prepare('INSERT INTO customers (id, name, address, created_at) VALUES (?, ?, ?, ?)');
-  for (const c of customers) {
+  for (const c of customersToInsert) {
     const name = typeof c === 'string' ? c : c.name;
     const address = typeof c === 'string' ? '' : (c.address || '');
     if (!name) continue;
     insert.run(id('cust_'), name, address, now);
+    existing.add(String(name).toLowerCase());
   }
 }
 
