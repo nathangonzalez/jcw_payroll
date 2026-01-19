@@ -339,14 +339,16 @@ function addLogoImage(workbook) {
 
 function addLogoToSheet(ws, logoId, col = 5.6) {
   try {
-    if (!logoId) return;
+    if (logoId === null || logoId === undefined) return;
     ws.addImage(logoId, {
       tl: { col, row: 0 },
       ext: { width: 90, height: 28 }
     });
     const row1 = ws.getRow(1);
     row1.height = Math.max(row1.height || 15, 24);
-  } catch (e) {}
+  } catch (e) {
+    console.warn('[export] failed to place logo', e?.message || e);
+  }
 }
 
 function formatSheet(ws) {
