@@ -1,5 +1,6 @@
 param(
   [string]$Project,
+  [string]$Version,
   [switch]$Seed
 )
 
@@ -18,7 +19,17 @@ Push-Location -Path (Split-Path -Path $MyInvocation.MyCommand.Definition -Parent
 Write-Output "Installing production dependencies..."
 npm ci --production
 
-$ver = "patch-$([int](Get-Date).ToUniversalTime().Subtract([datetime]'1970-01-01').TotalSeconds)"
+# Use short version names (jcw1, jcw2, etc.) - long names blocked by browser firewall
+if (-not $Version) {
+  # Auto-increment: find latest jcwN version and bump
+  $existing = gcloud app versions list --service=labor-timekeeper --project=$Project --format="value(version.id)" 2>$null | Where-Object { $_ -match '^jcw\d+$' }
+  $maxNum = 0
+  foreach ($v in $existing) {
+    if ($v -match 'jcw(\d+)') { $n = [int]$Matches[1]; if ($n -gt $maxNum) { $maxNum = $n } }
+  }
+  $Version = "jcw$($maxNum + 1)"
+}
+$ver = $Version
 Write-Output "Deploying version $ver (no promote)..."
 & gcloud app deploy app.yaml --project $Project --version $ver --no-promote --quiet
 

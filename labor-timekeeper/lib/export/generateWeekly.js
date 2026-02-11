@@ -210,7 +210,7 @@ export async function generateWeeklyExports({ db, weekStart }) {
         const applyLunch = hasTimes && (!lunchApplied && lunchHours !== "" && (spansLunch || afterLunch || (lunchStart == null && timeStart >= 12) || idx === workEntries.length - 1));
         const rowLunch = applyLunch ? lunchHours : "";
         const timeStartExcel = hasTimes ? (timeStart / 24) : "";
-        const lunchExcel = rowLunch === "" ? "" : (rowLunch / 24);
+        const lunchExcel = hasTimes ? (rowLunch === "" ? "" : (rowLunch / 24)) : (rowLunch === "" ? "" : Number(rowLunch));
         const timeOutExcel = hasTimes ? (timeOut / 24) : "";
 
         const row = ws.addRow([dateLabel, clientName, timeStartExcel, lunchExcel, timeOutExcel, "", entry.notes || "", "", "", "", "", ""]);

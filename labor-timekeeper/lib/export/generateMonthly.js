@@ -1250,8 +1250,8 @@ function buildTimesheetSheet(db, ws, entries, logoId, options = {}) {
       const dateLabel = idx === 0 ? `${dayName}-${dayNum}` : "";
       const applyLunch = (!lunchApplied && lunchHours !== "" && i === grouped.length - 1);
       const rowLunch = applyLunch ? lunchHours : "";
-      const lunchExcel = rowLunch === "" ? "" : (Number(rowLunch) / 24);
-      const row = ws.addRow([dateLabel, clientName, "", lunchExcel, "", "", (entry.notes || []).join("; "), "", "", "", "", ""]);
+      const lunchDisplay = rowLunch === "" ? "" : Number(rowLunch);
+      const row = ws.addRow([dateLabel, clientName, "", lunchDisplay, "", "", (entry.notes || []).join("; "), "", "", "", "", ""]);
       row.getCell(6).value = Number(hours) - (applyLunch ? Number(lunchHours || 0) : 0);
       const netHours = applyLunch ? Math.max(0, hours - Number(lunchHours || 0)) : hours;
       empTotalHours += netHours;
@@ -1300,7 +1300,7 @@ function buildTimesheetSheet(db, ws, entries, logoId, options = {}) {
   summaryRows.push(...remaining);
 
   let rIdx = dataStartRow; // summary panel starts at first data row
-  const summaryTotalRow = dataStartRow + 19; // 20 summary rows
+  const summaryTotalRow = dataStartRow + 29; // 30 summary rows (was 19, increased for employees with many clients)
   for (const s of summaryRows) {
     if (rIdx >= summaryTotalRow) break;
     const row = ws.getRow(rIdx);
@@ -1322,11 +1322,12 @@ function buildTimesheetSheet(db, ws, entries, logoId, options = {}) {
   totalSummaryRow.getCell(9).value = "TOTAL:";
   totalSummaryRow.getCell(10).value = { formula: `SUM(J${dataStartRow}:J${summaryTotalRow - 1})` };
   totalSummaryRow.getCell(11).value = singleRate;
-  totalSummaryRow.getCell(12).value = { formula: `IF(OR(J${summaryTotalRow}="",K${summaryTotalRow}=""),"",J${summaryTotalRow}*K${summaryTotalRow})` };
+  // Use SUM of individual L cells (not J*K) so mixed-rate employees (e.g., Chris Jacobi) still total correctly
+  totalSummaryRow.getCell(12).value = { formula: `SUM(L${dataStartRow}:L${summaryTotalRow - 1})` };
 
   if (isFirst) {
     ws.getColumn(3).numFmt = 'h:mm AM/PM';
-    ws.getColumn(4).numFmt = 'h:mm';
+    ws.getColumn(4).numFmt = '0.0';  // Lunch hours as plain number (was 'h:mm' which caused 1899-12-30 display)
     ws.getColumn(5).numFmt = 'h:mm AM/PM';
     ws.getColumn(6).numFmt = '0.00';
     ws.getColumn(11).numFmt = '"$"#,##0.00';

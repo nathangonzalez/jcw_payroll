@@ -50,7 +50,7 @@ Write-Host "[1/4] Health check on current prod..." -ForegroundColor Yellow
 try {
   $health = curl.exe -s "$baseUrl/api/health" | ConvertFrom-Json
   if (-not $health.ok) { throw "Health check returned ok=false" }
-  Write-Host "  OK — $($health.stats.time_entries) entries, $($health.stats.employees) employees" -ForegroundColor Green
+  Write-Host "  OK - $($health.stats.time_entries) entries, $($health.stats.employees) employees" -ForegroundColor Green
 } catch {
   Write-Error "Health check FAILED: $_"
   exit 1
@@ -60,9 +60,9 @@ try {
 Write-Host "[2/4] Forcing backup on current serving instance..." -ForegroundColor Yellow
 try {
   # Use the approve endpoint with empty ids to trigger backupToCloud (it runs backup even with 0 ids)
-  # Or better: hit the health endpoint after triggering a write — the scheduled backup will catch it.
+  # Or better: hit the health endpoint after triggering a write - the scheduled backup will catch it.
   # Safest: just wait for the SIGTERM handler we added. But let's also do an explicit backup trigger.
-  # We'll use a lightweight POST that triggers backupToCloud — /api/admin/clear-comments is safe (deletes nothing if empty)
+  # We'll use a lightweight POST that triggers backupToCloud - /api/admin/clear-comments is safe (deletes nothing if empty)
   $backupResp = curl.exe -s -X POST "$baseUrl/api/approve" -H "Content-Type: application/json" -d '{"ids":[]}' | ConvertFrom-Json
   Write-Host "  Backup triggered (approve endpoint touched)" -ForegroundColor Green
 } catch {
@@ -105,7 +105,7 @@ Start-Sleep -Seconds 5
 Write-Host "[5/5] Verifying new version..." -ForegroundColor Yellow
 try {
   $newHealth = curl.exe -s "$baseUrl/api/health" | ConvertFrom-Json
-  Write-Host "  OK — $($newHealth.stats.time_entries) entries" -ForegroundColor Green
+  Write-Host "  OK - $($newHealth.stats.time_entries) entries" -ForegroundColor Green
 } catch {
   Write-Warning "Post-promote health check failed: $_"
 }
