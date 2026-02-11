@@ -11,6 +11,7 @@ module.exports = defineConfig({
   reporter: 'html',
   use: {
     baseURL: process.env.BASE_URL || 'http://localhost:3000',
+    ignoreHTTPSErrors: process.env.IGNORE_HTTPS_ERRORS === '1',
     trace: 'on-first-retry',
   },
   projects: [

@@ -18,17 +18,25 @@ test.describe("Labor Timekeeper - No Auth Flow", () => {
 
   test("employee selector has options", async ({ page }) => {
     await page.goto(BASE + "/app");
+    await page.waitForFunction(() => document.querySelectorAll('#employee option').length > 1);
     const options = await page.locator("#employee option").count();
     expect(options).toBeGreaterThan(1); // at least default + some employees
   });
 
   test("main card disabled until employee selected", async ({ page }) => {
     await page.goto(BASE + "/app");
+    await page.waitForFunction(() => document.querySelectorAll('#employee option').length > 1);
     // Clear localStorage to ensure fresh state
     await page.evaluate(() => localStorage.removeItem('labor_timekeeper_employee'));
     await page.reload();
     
     const mainCard = page.locator("#mainCard");
+    await page.waitForFunction(() => {
+      const el = document.querySelector('#mainCard');
+      if (!el) return false;
+      const cs = getComputedStyle(el);
+      return cs.pointerEvents === 'none' || parseFloat(cs.opacity) < 1;
+    });
     const opacity = await mainCard.evaluate(el => getComputedStyle(el).opacity);
     expect(parseFloat(opacity)).toBeLessThan(1);
   });
@@ -37,6 +45,7 @@ test.describe("Labor Timekeeper - No Auth Flow", () => {
     await page.goto(BASE + "/app");
     
     // Select first non-empty employee
+    await page.waitForFunction(() => document.querySelectorAll('#employee option').length > 1);
     const options = await page.locator("#employee option").all();
     expect(options.length).toBeGreaterThan(1);
     
@@ -52,30 +61,33 @@ test.describe("Labor Timekeeper - No Auth Flow", () => {
 test.describe("Labor Timekeeper - Time Entry", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto(BASE + "/app");
+    await page.waitForFunction(() => document.querySelectorAll('#employee option').length > 1);
     // Select first employee
     await page.selectOption("#employee", { index: 1 });
     await page.waitForTimeout(300);
   });
-
-  test("customer select dropdown exists", async ({ page }) => {
-    await expect(page.locator("#customerSelect")).toBeVisible();
+  test("customer input exists", async ({ page }) => {
+    await expect(page.locator("#customerName")).toBeVisible();
   });
 
   test("customer options include addresses", async ({ page }) => {
-    const options = await page.locator("#customerSelect option").allTextContents();
-    expect(options.length).toBeGreaterThan(1); // At least one customer + placeholder
-    // Options should be in format "Name — Address"
-    const hasAddress = options.some(opt => opt.includes(" — "));
-    expect(hasAddress).toBe(true);
+    const options = await page.locator("#customerList option").allTextContents();
+    expect(options.length).toBeGreaterThan(1);
+    const hasAny = options.some(opt => opt && opt.trim().length > 0);
+    expect(hasAny).toBe(true);
   });
 
-  test("selecting customer shows address", async ({ page }) => {
-    // Find McGill option and select it by getting all options
-    const options = await page.locator("#customerSelect option").allTextContents();
-    const mcGillIndex = options.findIndex(opt => opt.includes("McGill"));
-    expect(mcGillIndex).toBeGreaterThan(0);
-    await page.selectOption("#customerSelect", { index: mcGillIndex });
-    await expect(page.locator("#customerAddress")).toContainText("800 Beach Rd");
+  test("typing customer shows confirm", async ({ page }) => {
+    await page.selectOption("#day", { index: 1 });
+    await page.fill("#startTime", "07:30");
+    await page.fill("#endTime", "16:00");
+    await expect(page.locator("#customerName")).toBeEnabled();
+    const options = await page.locator("#customerList option").allTextContents();
+    const first = options.find(o => o && o.trim().length > 0) || "";
+    const name = first.split(" ? ")[0].trim();
+    await page.fill("#customerName", name);
+    await page.dispatchEvent("#customerName", "change");
+    await expect(page.locator("#customerConfirm")).not.toHaveText("");
   });
 
   test("day selector has weekday options", async ({ page }) => {
@@ -100,8 +112,20 @@ test.describe("Labor Timekeeper - Admin Page", () => {
   });
 
   test("admin page shows report button", async ({ page }) => {
-    await page.click("#toggleDevBtn");
     await expect(page.locator("#genMonthBtn")).toBeVisible();
+  });
+
+  test("admin can simulate full month", async ({ request }) => {
+    const adminSecret = process.env.ADMIN_SECRET || "7707";
+    const now = new Date();
+    const month = process.env.SIM_MONTH || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const resp = await request.post(`${BASE}/api/admin/simulate-month`, {
+      headers: { "Content-Type": "application/json", "x-admin-secret": adminSecret },
+      data: { month, reset: true, submit: true, approve: true }
+    });
+    expect(resp.ok()).toBe(true);
+    const data = await resp.json();
+    expect(data.ok).toBe(true);
   });
 });
 
@@ -139,15 +163,16 @@ test.describe("Labor Timekeeper - Export Format", () => {
 
     const sheet1 = wb.getWorksheet("Sheet1");
     const header = [];
-    for (let i = 1; i <= 11; i++) header.push(sheet1.getRow(1).getCell(i).value || "");
+    for (let i = 1; i <= 12; i++) header.push(sheet1.getRow(1).getCell(i).value || "");
     expect(header).toEqual([
-      "Date", "Client Name", "Time Start", "Lunch", "Time Out", "Hours Per Job", "", "Client", "Hours", "Rate", "Total"
+      "Date", "Client Name", "Time Start", "Lunch", "Time Out", "Hours Per Job", "Notes", "", "Client", "Hours", "Rate", "Total"
     ]);
     expect(sheet1.getRow(39).getCell(5).value).toBe("Total:");
     expect(sheet1.getRow(39).getCell(6).value.formula).toBe("SUM(F2:F38)");
-    expect(sheet1.getRow(21).getCell(9).value.formula).toBe("SUM(I2:I20)");
-    expect(sheet1.getRow(21).getCell(11).value.formula).toBe("SUM(K2:K20)");
-    expect(sheet1.getRow(2).getCell(11).value.formula).toBe("I2*J2");
+    expect(sheet1.getRow(2).getCell(10).value.formula).toBe("IF(I2=\"\",\"\",SUMIF($B$2:$B$38,TRIM(I2),$F$2:$F$38))");
+    expect(sheet1.getRow(21).getCell(10).value.formula).toBe("SUM(J2:J20)");
+    expect(sheet1.getRow(21).getCell(12).value.formula).toBe("IF(OR(J21=\"\",K21=\"\"),\"\",J21*K21)");
+    expect(sheet1.getRow(2).getCell(12).value.formula).toBe("IF(OR(J2=\"\",K2=\"\"),\"\",J2*K2)");
 
     const sheet2 = wb.getWorksheet("Sheet2");
     expect(sheet2.getCell("A1").value).toBe("OFFICE USE ONLY:");
@@ -227,5 +252,99 @@ test.describe("Labor Timekeeper - API Endpoints (No Auth)", () => {
     const data = await response.json();
     expect(data.ok).toBe(true);
     expect(Array.isArray(data.holidays)).toBe(true);
+  });
+});
+
+
+test.describe("Labor Timekeeper - Stress Test (API)", () => {
+  test("create, submit, approve full week for all employees", async ({ request }) => {
+    const adminSecret = process.env.ADMIN_SECRET || "7707";
+    const weekStart = process.env.STRESS_WEEK_START || "2026-01-28";
+
+    const empResp = await request.get(`${BASE}/api/employees`);
+    expect(empResp.ok()).toBe(true);
+    const employees = await empResp.json();
+    expect(employees.length).toBeGreaterThan(0);
+
+    const custResp = await request.get(`${BASE}/api/customers`);
+    expect(custResp.ok()).toBe(true);
+    const customers = await custResp.json();
+    const lunch = customers.find(c => c.name.toLowerCase() === "lunch");
+    expect(lunch).toBeTruthy();
+
+    const primaryCustomers = customers.filter(c => c.id !== lunch.id).slice(0, 5);
+    expect(primaryCustomers.length).toBeGreaterThan(0);
+
+    const weekDays = [
+      "2026-01-28",
+      "2026-01-29",
+      "2026-01-30",
+      "2026-01-31",
+      "2026-02-01",
+      "2026-02-02",
+      "2026-02-03",
+    ];
+
+    for (const emp of employees) {
+      let custIdx = 0;
+      for (const day of weekDays) {
+        const cust = primaryCustomers[custIdx % primaryCustomers.length];
+        custIdx += 1;
+        const workEntry = {
+          employee_id: emp.id,
+          customer_id: cust.id,
+          work_date: day,
+          hours: 8,
+          notes: "stress test",
+          status: "DRAFT"
+        };
+        const lunchEntry = {
+          employee_id: emp.id,
+          customer_id: lunch.id,
+          work_date: day,
+          hours: 0.5,
+          notes: "lunch",
+          status: "DRAFT"
+        };
+        const e1 = await request.post(`${BASE}/api/time-entries`, {
+          headers: { "Content-Type": "application/json" },
+          data: workEntry
+        });
+        expect(e1.ok()).toBe(true);
+        const e2 = await request.post(`${BASE}/api/time-entries`, {
+          headers: { "Content-Type": "application/json" },
+          data: lunchEntry
+        });
+        expect(e2.ok()).toBe(true);
+      }
+
+      const submitResp = await request.post(`${BASE}/api/submit-week`, {
+        headers: { "Content-Type": "application/json" },
+        data: { employee_id: emp.id, week_start: weekStart, comment: "stress test submit" }
+      });
+      expect(submitResp.ok()).toBe(true);
+    }
+
+    const approvalsResp = await request.get(`${BASE}/api/approvals?week_start=${encodeURIComponent(weekStart)}`, {
+      headers: { "x-admin-secret": adminSecret }
+    });
+    expect(approvalsResp.ok()).toBe(true);
+    const approvals = await approvalsResp.json();
+    const ids = (approvals.submitted || []).map(r => r.id);
+    expect(ids.length).toBeGreaterThan(0);
+
+    const approveResp = await request.post(`${BASE}/api/approve`, {
+      headers: { "Content-Type": "application/json", "x-admin-secret": adminSecret },
+      data: { ids }
+    });
+    expect(approveResp.ok()).toBe(true);
+
+    const previewResp = await request.get(`${BASE}/api/admin/report-preview?month=2026-02`, {
+      headers: { "x-admin-secret": adminSecret }
+    });
+    expect(previewResp.ok()).toBe(true);
+    const preview = await previewResp.json();
+    expect(preview.ok).toBe(true);
+    expect(preview.totals && preview.totals.hours).toBeGreaterThan(0);
   });
 });

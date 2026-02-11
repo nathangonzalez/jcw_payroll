@@ -15,3 +15,6 @@ playwright-report/
 *.md
 tests/
 scripts/simulate*.js
+~$*
+*.xlsx
+*.xls

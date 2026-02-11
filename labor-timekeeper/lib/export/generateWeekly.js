@@ -12,6 +12,7 @@ import { fileURLToPath } from "url";
 import { getBillRate } from "../billing.js";
 import { getEmployeeCategory, splitEntriesWithOT, calculatePayWithOT } from "../classification.js";
 import { isHoliday } from "../holidays.js";
+import { weekDates, weekStartYMD, ymdToDate } from "../time.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,17 +29,16 @@ const LOGO_PATHS = [
  * @returns {Promise<{files: Array, totals: Object}>}
  */
 export async function generateWeeklyExports({ db, weekStart }) {
-  // Calculate week end (7 days from start)
-  const [y, m, d] = weekStart.split("-").map(Number);
-  const startDate = new Date(y, m - 1, d);
-  const endDate = new Date(startDate);
-  endDate.setDate(endDate.getDate() + 6);
-  const weekEnd = formatYmd(endDate);
+  // Normalize week start to payroll boundary and compute range
+  const normalizedWeekStart = weekStartYMD(ymdToDate(weekStart));
+  const { ordered } = weekDates(normalizedWeekStart);
+  const weekStartYmd = ordered[0].ymd;
+  const weekEnd = ordered[6].ymd;
 
   // Create output directory (use /tmp in production for App Engine)
   const baseDir = process.env.NODE_ENV === 'production' ? '/tmp/exports' : './exports';
-  const monthDir = weekStart.slice(0, 7);
-  const outputDir = path.resolve(`${baseDir}/${monthDir}/${weekStart}`);
+  const monthDir = weekStartYmd.slice(0, 7);
+  const outputDir = path.resolve(`${baseDir}/${monthDir}/${weekStartYmd}`);
   ensureDir(outputDir);
 
   // Query all approved entries for the week, grouped by employee
@@ -50,7 +50,7 @@ export async function generateWeeklyExports({ db, weekStart }) {
     WHERE te.work_date >= ? AND te.work_date <= ?
       AND te.status = 'APPROVED'
     ORDER BY te.employee_id, te.work_date ASC
-  `).all(weekStart, weekEnd);
+  `).all(weekStartYmd, weekEnd);
 
   // Group by employee
   const byEmployee = new Map();
@@ -88,8 +88,10 @@ export async function generateWeeklyExports({ db, weekStart }) {
   for (const [empId, emp] of byEmployee) {
     const category = getEmployeeCategory(emp.name);
     const workbook = new ExcelJS.Workbook();
+    workbook.calcProperties.fullCalcOnLoad = true;
     const logoId = addLogoImage(workbook);
     const ws = workbook.addWorksheet("Sheet1");
+    const weekComment = getWeekComment(db, empId, weekStartYmd);
     // Jason Green.xls-style header
     ws.columns = [
       { width: 10 }, // Date
@@ -98,16 +100,17 @@ export async function generateWeeklyExports({ db, weekStart }) {
       { width: 10 }, // Lunch
       { width: 12 }, // Time Out
       { width: 14 }, // Hours Per Job
+      { width: 24 }, // Notes
       { width: 3 },  // spacer
       { width: 22 }, // Client
       { width: 10 }, // Hours
       { width: 10 }, // Rate
       { width: 12 }, // Total
     ];
-    const headerRow = ws.addRow(["Date", "Client Name", "Time Start", "Lunch", "Time Out", "Hours Per Job", "", "Client", "Hours", "Rate", "Total"]);
+    const headerRow = ws.addRow(["Date", "Client Name", "Time Start", "Lunch", "Time Out", "Hours Per Job", "Notes", "", "Client", "Hours", "Rate", "Total"]);
     headerRow.font = { bold: true };
     headerRow.eachCell((cell, colNum) => {
-      if ([1,2,3,4,5,6,8,9,10,11].includes(colNum)) {
+      if ([1,2,3,4,5,6,7,9,10,11,12].includes(colNum)) {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
       }
     });
@@ -124,8 +127,9 @@ export async function generateWeeklyExports({ db, weekStart }) {
       };
     });
 
-    // Split entries for OT calculation (hourly employees)
-    const processedEntries = splitEntriesWithOT(enrichedEntries, category);
+    // Apply lunch deduction for net hours before OT split
+    const adjustedEntries = applyLunchNetHours(enrichedEntries);
+    const processedEntries = splitEntriesWithOT(adjustedEntries.map(e => ({ ...e })), category);
 
     // Calculate totals for this employee
     let empTotalHours = 0;
@@ -135,14 +139,13 @@ export async function generateWeeklyExports({ db, weekStart }) {
 
     // Prepare entries grouped by date for left panel
     const entriesByDate = new Map();
-    for (const entry of processedEntries) {
+    for (const entry of adjustedEntries) {
       const key = entry.work_date;
       if (!entriesByDate.has(key)) entriesByDate.set(key, []);
       entriesByDate.get(key).push(entry);
     }
     const sortedDates = [...entriesByDate.keys()].sort();
 
-    const leftRows = [];
     const summaryMap = new Map();
 
     for (const date of sortedDates) {
@@ -164,7 +167,21 @@ export async function generateWeeklyExports({ db, weekStart }) {
       }
       if (lunchIndex === -1) lunchIndex = 0;
       let idx = 0;
-      for (const entry of dayEntries) {
+      const orderedEntries = [...dayEntries].sort((a, b) => {
+        const aStart = parseTimeToHours(a.start_time);
+        const bStart = parseTimeToHours(b.start_time);
+        if (aStart != null && bStart != null) return aStart - bStart;
+        if (aStart != null) return -1;
+        if (bStart != null) return 1;
+        return 0;
+      });
+      const lunchEntry = orderedEntries.find(isLunchEntry);
+      const lunchHours = lunchEntry ? Number((lunchEntry.raw_hours ?? lunchEntry.hours ?? 0)) : "";
+      const lunchStart = lunchEntry ? parseTimeToHours(lunchEntry.start_time) : null;
+      const lunchEnd = lunchEntry ? parseTimeToHours(lunchEntry.end_time) : null;
+      const workEntries = orderedEntries.filter(e => !isLunchEntry(e));
+      let lunchApplied = false;
+      for (const entry of workEntries) {
         const hours = Number(entry.hours);
         const rate = entry.rate;
 
@@ -173,27 +190,32 @@ export async function generateWeeklyExports({ db, weekStart }) {
         if (entry.notes?.toLowerCase().includes("pto")) type = "PTO";
 
         const clientName = type === "PTO" ? "PTO" : (type === "Holiday" ? "Holiday Pay" : entry.customer_name);
-        const dateLabel = idx === 0 ? dayName : (idx === 1 ? dayNum : "");
+        const dateLabel = idx === 0 ? `${dayName}-${dayNum}` : "";
 
-        const timeStart = currentTime;
-        const lunch = idx === lunchIndex ? 0.5 : "";
-        const timeOut = timeStart + hours + (lunch === "" ? 0 : lunch);
+        const explicitStart = parseTimeToHours(entry.start_time);
+        const explicitEnd = parseTimeToHours(entry.end_time);
+        const hasTimes = explicitStart != null && explicitEnd != null;
+        const timeStart = hasTimes ? explicitStart : null;
+        const timeOut = hasTimes ? explicitEnd : null;
+        const spansLunch = hasTimes && (lunchStart != null && lunchEnd != null && timeStart <= lunchStart && timeOut >= lunchEnd);
+        const afterLunch = hasTimes && (lunchStart != null && timeStart >= lunchStart);
+        const applyLunch = hasTimes && (!lunchApplied && lunchHours !== "" && (spansLunch || afterLunch || (lunchStart == null && timeStart >= 12) || idx === workEntries.length - 1));
+        const rowLunch = applyLunch ? lunchHours : "";
+        const timeStartExcel = hasTimes ? (timeStart / 24) : "";
+        const lunchExcel = rowLunch === "" ? "" : (rowLunch / 24);
+        const timeOutExcel = hasTimes ? (timeOut / 24) : "";
 
-        leftRows.push([dateLabel, clientName, round2(timeStart), lunch, round2(timeOut), hours, "", "", "", "", ""]);
-        if (idx === 0 && dayEntries.length === 1) {
-          // Add date-number row with only hours, matching template layout
-          leftRows.push([dayNum, "", "", "", "", hours, "", "", "", "", ""]);
+        const row = ws.addRow([dateLabel, clientName, timeStartExcel, lunchExcel, timeOutExcel, "", entry.notes || "", "", "", "", "", ""]);
+        if (hasTimes) {
+          row.getCell(6).value = { formula: `(E${row.number}-C${row.number}-N(D${row.number}))*24` };
+        } else {
+          row.getCell(6).value = Number(hours);
         }
-        currentTime = timeOut;
+        if (hasTimes) currentTime = timeOut;
         idx += 1;
+        if (applyLunch) lunchApplied = true;
 
-        const otMultiplier = type === "OT" ? 1.5 : 1;
-        const total = round2(hours * rate * otMultiplier);
-
-        empTotalHours += hours;
-        if (type === "OT") empOTHours += hours;
-        else empRegularHours += hours;
-        empTotalAmount += total;
+        const total = round2(hours * rate);
 
         const summaryName = clientName === "PTO" ? "PTO " : clientName;
         const key = summaryName.toLowerCase();
@@ -207,22 +229,38 @@ export async function generateWeeklyExports({ db, weekStart }) {
       }
     }
 
-    for (const r of leftRows) ws.addRow(r);
+    // Compute OT and totals using processed entries (net hours)
+    for (const entry of processedEntries) {
+      if (isLunchEntry(entry)) continue;
+      const hours = Number(entry.hours || 0);
+      if (!Number.isFinite(hours)) continue;
+      let type = entry.type || "Regular";
+      if (entry.holidayName || entry.notes?.toLowerCase().includes("holiday")) type = "Holiday";
+      if (entry.notes?.toLowerCase().includes("pto")) type = "PTO";
+      const otMultiplier = type === "OT" ? 1.5 : 1;
+      const total = round2(hours * entry.rate * otMultiplier);
+      empTotalHours += hours;
+      if (type === "OT") empOTHours += hours;
+      else empRegularHours += hours;
+      empTotalAmount += total;
+    }
+
     const desiredTotalRow = 39; // matches template where Total is on row 39
-    let fillerIdx = 0;
     while (ws.rowCount < desiredTotalRow - 1) {
-      // Template shows a single "8" filler then zeros
-      const hours = fillerIdx === 0 ? 8 : 0;
-      ws.addRow(["", "", "", "", "", hours, "", "", "", "", ""]);
-      fillerIdx += 1;
+      ws.addRow(["", "", "", "", "", "", "", "", "", "", "", ""]);
     }
 
     const totalRowIndex = desiredTotalRow;
-    const totalRow = ["", "", "", "", "Total:", { formula: `SUM(F2:F${totalRowIndex - 1})` }, "", "", "", "", ""];
-    ws.addRow(totalRow);
+    const totalRow = ["", "", "", "", "Total:", { formula: `SUM(F2:F${totalRowIndex - 1})` }, "", "", "", "", "", ""];
+    const totalRowObj = ws.addRow(totalRow);
+    if (weekComment) {
+      totalRowObj.getCell(7).value = "Comment:";
+      totalRowObj.getCell(8).value = weekComment;
+    }
 
     // Right panel summary (client totals)
     const preferredOrder = ["Hall", "Howard", "Lucas", "Richer", "", "PTO ", "Holiday Pay"];
+    const rateSet = new Set([...summaryMap.values()].map(s => s.rate).filter(r => r !== "" && r != null));
     const singleRate = rateSet.size === 1 ? [...rateSet][0] : "";
     const summaryRows = [];
     const used = new Set();
@@ -243,48 +281,40 @@ export async function generateWeeklyExports({ db, weekStart }) {
 
     let rIdx = 2;
     const summaryTotalRow = 21; // template TOTAL row
-    const rateSet = new Set();
-    let totalSummaryHours = 0;
-    let totalSummaryAmount = 0;
     for (const s of summaryRows) {
       if (rIdx >= summaryTotalRow) break;
       const row = ws.getRow(rIdx);
-      row.getCell(8).value = s.name || "";
-      if (s.name) {
-        row.getCell(9).value = round2(s.hours);
-        row.getCell(10).value = s.rate;
-        row.getCell(11).value = { formula: `I${rIdx}*J${rIdx}` };
-        totalSummaryHours += Number(s.hours || 0);
-        totalSummaryAmount += round2(Number(s.hours || 0) * Number(s.rate || 0));
-        rateSet.add(s.rate);
-      } else {
-        row.getCell(9).value = "";
-        row.getCell(10).value = singleRate;
-        row.getCell(11).value = 0;
-      }
+      row.getCell(9).value = s.name || "";
+      row.getCell(10).value = { formula: `IF(I${rIdx}="","",SUMIF($B$2:$B$${totalRowIndex - 1},TRIM(I${rIdx}),$F$2:$F$${totalRowIndex - 1}))` };
+      row.getCell(11).value = s.name ? s.rate : "";
+      row.getCell(12).value = { formula: `IF(OR(J${rIdx}="",K${rIdx}=""),"",J${rIdx}*K${rIdx})` };
       rIdx++;
     }
     while (rIdx < summaryTotalRow) {
       const row = ws.getRow(rIdx);
-      row.getCell(8).value = "";
       row.getCell(9).value = "";
-      row.getCell(10).value = singleRate;
-      row.getCell(11).value = 0;
+      row.getCell(10).value = { formula: `IF(I${rIdx}="","",SUMIF($B$2:$B$${totalRowIndex - 1},TRIM(I${rIdx}),$F$2:$F$${totalRowIndex - 1}))` };
+      row.getCell(11).value = "";
+      row.getCell(12).value = { formula: `IF(OR(J${rIdx}="",K${rIdx}=""),"",J${rIdx}*K${rIdx})` };
       rIdx++;
     }
     const totalSummaryRow = ws.getRow(summaryTotalRow);
-    totalSummaryRow.getCell(8).value = "TOTAL:";
-    totalSummaryRow.getCell(9).value = { formula: `SUM(I2:I${summaryTotalRow - 1})` };
-    totalSummaryRow.getCell(10).value = singleRate;
-    totalSummaryRow.getCell(11).value = { formula: `SUM(K2:K${summaryTotalRow - 1})` };
+    totalSummaryRow.getCell(9).value = "TOTAL:";
+    totalSummaryRow.getCell(10).value = { formula: `SUM(J2:J${summaryTotalRow - 1})` };
+    totalSummaryRow.getCell(11).value = singleRate;
+    totalSummaryRow.getCell(12).value = { formula: `IF(OR(J${summaryTotalRow}="",K${summaryTotalRow}=""),"",J${summaryTotalRow}*K${summaryTotalRow})` };
 
-    ws.getColumn(10).numFmt = '"$"#,##0.00';
+    ws.getColumn(3).numFmt = 'h:mm AM/PM';
+    ws.getColumn(4).numFmt = 'h:mm';
+    ws.getColumn(5).numFmt = 'h:mm AM/PM';
+    ws.getColumn(6).numFmt = '0.00';
     ws.getColumn(11).numFmt = '"$"#,##0.00';
+    ws.getColumn(12).numFmt = '"$"#,##0.00';
     try { formatSheet(ws); } catch (e) {}
 
     // Save file
     const safeName = emp.name.replace(/[^a-zA-Z0-9]/g, "_");
-    const filename = `${safeName}_${weekStart}.xlsx`;
+    const filename = `${safeName}_${weekStartYmd}.xlsx`;
     const filepath = path.join(outputDir, filename);
     // Office Use Only sheet (template-style)
     const officeSheet = workbook.addWorksheet("Sheet2");
@@ -295,7 +325,7 @@ export async function generateWeeklyExports({ db, weekStart }) {
     ];
     officeSheet.getCell("A1").value = "OFFICE USE ONLY:";
     officeSheet.getCell("A1").font = { bold: true };
-    const weekRange = `${formatMdy(startDate)} - ${formatMdy(endDate)}`;
+    const weekRange = `${formatMdy(ymdToDate(weekStartYmd))} - ${formatMdy(ymdToDate(weekEnd))}`;
     officeSheet.getCell("A5").value = emp.name;
     officeSheet.getCell("F5").value = weekRange;
     officeSheet.getCell("A7").value = "JOB";
@@ -377,6 +407,84 @@ function ensureDir(dir) {
 
 function round2(n) {
   return Math.round(Number(n) * 100) / 100;
+}
+
+function parseTimeToHours(t) {
+  if (!t || typeof t !== 'string') return null;
+  const parts = t.split(':');
+  if (parts.length < 2) return null;
+  const h = Number(parts[0]);
+  const m = Number(parts[1]);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  return h + (m / 60);
+}
+
+function isLunchEntry(entry) {
+  const name = String(entry.customer_name || '').toLowerCase();
+  const notes = String(entry.notes || '').toLowerCase();
+  return name === 'lunch' || notes.includes('lunch');
+}
+
+function applyLunchNetHours(entries) {
+  for (const e of entries) {
+    const raw = Number(e.hours || 0);
+    e.raw_hours = raw;
+    if (isLunchEntry(e)) e.hours = 0;
+  }
+  const byDate = new Map();
+  for (const e of entries) {
+    if (!byDate.has(e.work_date)) byDate.set(e.work_date, []);
+    byDate.get(e.work_date).push(e);
+  }
+  for (const dayEntries of byDate.values()) {
+    const lunchEntry = dayEntries.find(isLunchEntry);
+    const lunchHours = lunchEntry ? Number(lunchEntry.raw_hours || 0) : 0;
+    const lunchStart = lunchEntry ? parseTimeToHours(lunchEntry.start_time) : null;
+    const lunchEnd = lunchEntry ? parseTimeToHours(lunchEntry.end_time) : null;
+    const workEntries = dayEntries.filter(e => !isLunchEntry(e));
+    const ordered = [...workEntries].sort((a, b) => {
+      const aStart = parseTimeToHours(a.start_time);
+      const bStart = parseTimeToHours(b.start_time);
+      if (aStart != null && bStart != null) return aStart - bStart;
+      if (aStart != null) return -1;
+      if (bStart != null) return 1;
+      return 0;
+    });
+    let lunchApplied = false;
+    if (lunchHours > 0 && lunchStart == null && lunchEnd == null && ordered.length) {
+      const first = ordered[0];
+      const base = Number(first.raw_hours || 0);
+      first.hours = Math.max(0, round2(base - lunchHours));
+      lunchApplied = true;
+    }
+    for (let i = 0; i < ordered.length; i += 1) {
+      const entry = ordered[i];
+      let netHours = Number(entry.raw_hours || 0);
+      const timeStart = parseTimeToHours(entry.start_time);
+      const timeOut = parseTimeToHours(entry.end_time);
+      const spansLunch = (lunchStart != null && lunchEnd != null && timeStart != null && timeOut != null && timeStart <= lunchStart && timeOut >= lunchEnd);
+      const afterLunch = (lunchStart != null && timeStart != null && timeStart >= lunchStart);
+      const applyLunch = (!lunchApplied && lunchHours > 0 && (spansLunch || afterLunch || (lunchStart == null && timeStart != null && timeStart >= 12) || i === ordered.length - 1));
+      if (applyLunch) {
+        netHours = Math.max(0, netHours - lunchHours);
+        lunchApplied = true;
+      }
+      entry.hours = netHours;
+    }
+  }
+  return entries;
+}
+
+function getWeekComment(db, employeeId, weekStart) {
+  try {
+    const row = db.prepare(`
+      SELECT comment FROM weekly_comments
+      WHERE employee_id = ? AND week_start = ?
+    `).get(employeeId, weekStart);
+    return row?.comment || '';
+  } catch {
+    return '';
+  }
 }
 
 function addLogoImage(workbook) {

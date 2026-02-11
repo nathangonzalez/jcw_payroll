@@ -12,14 +12,36 @@ function safeJsonArray(s) {
 export function ensureEmployees(db) {
   try {
     const row = db.prepare('SELECT COUNT(*) AS n FROM employees').get();
-    if ((row?.n ?? 0) > 0) return { ok: true, inserted: 0 };
+    if ((row?.n ?? 0) > 0) {
+      const update = db.prepare(`
+        UPDATE employees
+        SET default_bill_rate = ?, default_pay_rate = ?, is_admin = ?, aliases_json = ?
+        WHERE name = ?
+          AND (
+            default_bill_rate IS NULL OR default_bill_rate = 0
+            OR default_pay_rate IS NULL OR default_pay_rate = 0
+          )
+      `);
+      let updated = 0;
+      for (const e of DEFAULT_EMPLOYEES) {
+        const result = update.run(
+          Number(e.default_bill_rate || 0),
+          Number(e.default_pay_rate || 0),
+          e.role === 'admin' ? 1 : 0,
+          JSON.stringify(e.aliases || []),
+          e.name
+        );
+        if (result.changes > 0) updated += result.changes;
+      }
+      return { ok: true, inserted: 0, updated };
+    }
 
     let inserted = 0;
     const now = new Date().toISOString();
     const insert = db.prepare(`INSERT INTO employees (id, name, default_bill_rate, default_pay_rate, is_admin, aliases_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`);
     for (const e of DEFAULT_EMPLOYEES) {
       const id = 'emp_' + Math.random().toString(36).slice(2, 10);
-      insert.run(id, e.name, 0, 0, e.role === 'admin' ? 1 : 0, JSON.stringify(e.aliases || []), now);
+      insert.run(id, e.name, Number(e.default_bill_rate || 0), Number(e.default_pay_rate || 0), e.role === 'admin' ? 1 : 0, JSON.stringify(e.aliases || []), now);
       inserted++;
     }
     return { ok: true, inserted };
@@ -44,5 +66,12 @@ export function getEmployeesDBOrDefault(db) {
   } catch (err) {
     // ignore and fallback
   }
-  return DEFAULT_EMPLOYEES.map((e, idx) => ({ id: `-d${idx+1}`, name: e.name, default_bill_rate: 0, default_pay_rate: 0, role: e.role, aliases: e.aliases }));
+  return DEFAULT_EMPLOYEES.map((e, idx) => ({
+    id: `-d${idx+1}`,
+    name: e.name,
+    default_bill_rate: Number(e.default_bill_rate || 0),
+    default_pay_rate: Number(e.default_pay_rate || 0),
+    role: e.role,
+    aliases: e.aliases
+  }));
 }

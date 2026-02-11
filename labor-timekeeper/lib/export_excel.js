@@ -6,14 +6,14 @@ export async function buildMonthlyWorkbook({ db, monthYmd }) {
   const workbook = new ExcelJS.Workbook();
   const ws = workbook.addWorksheet("Monthly Summary");
 
-  // Pull approved+submitted entries for the month (you can tighten to APPROVED only if desired)
+  // Pull approved entries for the month
   const rows = db.prepare(`
     SELECT te.*, e.name as employee_name, c.name as customer_name
     FROM time_entries te
     JOIN employees e ON e.id = te.employee_id
     JOIN customers c ON c.id = te.customer_id
     WHERE te.work_date >= ? AND te.work_date < ?
-      AND te.status IN ('SUBMITTED','APPROVED')
+      AND te.status = 'APPROVED'
   `).all(monthYmd, nextMonth(monthYmd));
 
   const employees = [...new Set(rows.map(r => r.employee_name))].sort((a,b)=>a.localeCompare(b));

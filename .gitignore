@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Data & databases
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/backups/
+data/*.json
+*.db
+
+# Credentials & secrets
+gcloud-auth.json
+gcloud-configs.json
+gcloud-info.json
+sa-keys.json
+sa-candidates.txt
+.env
+
+# Temp files
+tmp_*.mjs
+tmp_*.ps1
+tmp_*.xlsx
+tmp_*.json
+.tmp_*
+
+# Generated exports & reports
+*.xlsx
+exports/
+*.zip
+
+# Run logs
+run-*.log
+runs.json
+
+# OS
+.DS_Store
+wsl

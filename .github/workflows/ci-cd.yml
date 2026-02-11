@@ -63,11 +63,49 @@ jobs:
         run: |
           if [ -f labor-timekeeper/webserver.pid ]; then kill $(cat labor-timekeeper/webserver.pid) || true; fi
 
-  deploy:
-    name: Deploy to App Engine
+  deploy-patch:
+    name: Deploy Patch (no promote)
     needs: build-and-test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GCP_SA_KEY_B64: ${{ secrets.GCP_SA_KEY_B64 }}
+    outputs:
+      version: ${{ steps.set_version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Write GCP key from base64 secret
+        run: |
+          printf '%s' "$GCP_SA_KEY_B64" | tr -d '\r' | base64 --decode > gcloud-key.json
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Authenticate gcloud
+        run: gcloud auth activate-service-account --key-file=gcloud-key.json
+
+      - name: Set patch version
+        id: set_version
+        run: echo "version=p${GITHUB_RUN_ID}" >> $GITHUB_OUTPUT
+
+      - name: Deploy App Engine patch (no promote)
+        run: |
+          gcloud app deploy labor-timekeeper/app.yaml --quiet --no-promote --version "${{ steps.set_version.outputs.version }}"
+
+      - name: Patch URL
+        run: echo "https://${{ steps.set_version.outputs.version }}-dot-labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com"
+
+  promote:
+    name: Promote Patch to Prod
+    needs: deploy-patch
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
     env:
       GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
       GCP_SA_KEY_B64: ${{ secrets.GCP_SA_KEY_B64 }}
@@ -87,18 +125,6 @@ jobs:
       - name: Authenticate gcloud
         run: gcloud auth activate-service-account --key-file=gcloud-key.json
 
-      - name: Deploy App Engine service
+      - name: Promote patch to prod
         run: |
-          attempt=1
-          max=3
-          while [ $attempt -le $max ]; do
-            if gcloud app deploy labor-timekeeper/app.yaml --quiet --promote; then
-              exit 0
-            fi
-            if [ $attempt -eq $max ]; then
-              exit 1
-            fi
-            echo "Deploy failed; retrying in 15s (attempt $attempt/$max)..." >&2
-            sleep 15
-            attempt=$((attempt + 1))
-          done
+          gcloud app services set-traffic labor-timekeeper --splits "${{ needs.deploy-patch.outputs.version }}=1"

@@ -9,6 +9,8 @@ a{ color:var(--accent); text-decoration:none; }
 h1,h2{ margin:0 0 10px 0; }
 .muted{ color:var(--muted); }
 input,select,button,textarea{ width:100%; padding:10px 12px; border-radius:12px; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.06); color:var(--text); }
+/* Emphasize day/time selectors so they stand out */
+.emph-input{ font-weight:600; background:rgba(110,168,254,.18); border-color:rgba(110,168,254,.45); }
 /* Ensure native dropdowns render above cards/overlays */
 select{ position:relative; z-index:2; }
 /* Primary customer select styling: blue highlight and white font */
@@ -36,3 +38,50 @@ hr{ border:none; border-top:1px solid rgba(255,255,255,.08); margin:14px 0; }
 /* Ensure pipeline result text is readable when using a light background */
 #pipelineResult { background: #f8f9fa !important; color: #111 !important; }
 #pipelineResult pre, #pipelineResult code { color: #111 !important; }
+
+/* ── Mobile-first enhancements ── */
+@media (max-width: 640px) {
+  .container { padding: 10px; }
+  .card { padding: 12px; border-radius: 12px; }
+  .row { gap: 8px; }
+  .col { flex: 1 1 100%; }
+  h1 { font-size: 1.4rem; }
+  h2 { font-size: 1.15rem; }
+  input, select, button, textarea { padding: 12px 14px; font-size: 1rem; border-radius: 10px; }
+  button.primary, #saveBtn, #submitBtn, #recBtn {
+    padding: 14px 16px;
+    font-size: 1.1rem;
+    min-height: 48px;
+  }
+  th, td { padding: 6px 6px; font-size: 13px; }
+  .badge { font-size: 11px; padding: 2px 6px; }
+}
+
+/* Collapsible sections */
+.collapsible-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.collapsible-header .toggle-icon {
+  font-size: 1.2rem;
+  transition: transform 0.2s;
+  color: var(--muted);
+}
+.collapsible-header .toggle-icon.collapsed {
+  transform: rotate(-90deg);
+}
+.collapsible-body {
+  overflow: hidden;
+  transition: max-height 0.3s ease;
+}
+.collapsible-body.collapsed {
+  max-height: 0 !important;
+  overflow: hidden;
+}
+
+/* Notes toggle */
+.notes-hidden .notes-col { display: none; }

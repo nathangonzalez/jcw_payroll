@@ -94,11 +94,11 @@ function restore(inputFile) {
     
     // Restore employees
     const insertEmp = db.prepare(`
-      INSERT INTO employees (id, name, pin_hash, default_bill_rate, default_pay_rate, is_admin, aliases_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO employees (id, name, default_bill_rate, default_pay_rate, is_admin, aliases_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     for (const e of data.tables.employees) {
-      insertEmp.run(e.id, e.name, e.pin_hash, e.default_bill_rate, e.default_pay_rate, e.is_admin, e.aliases_json, e.created_at);
+      insertEmp.run(e.id, e.name, e.default_bill_rate, e.default_pay_rate, e.is_admin, e.aliases_json, e.created_at);
     }
     console.log(`  Restored ${data.tables.employees.length} employees`);
     
@@ -114,11 +114,11 @@ function restore(inputFile) {
     
     // Restore time entries
     const insertEntry = db.prepare(`
-      INSERT INTO time_entries (id, employee_id, customer_id, work_date, hours, notes, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO time_entries (id, employee_id, customer_id, work_date, hours, start_time, end_time, notes, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     for (const t of data.tables.time_entries) {
-      insertEntry.run(t.id, t.employee_id, t.customer_id, t.work_date, t.hours, t.notes || '', t.status, t.created_at, t.updated_at);
+      insertEntry.run(t.id, t.employee_id, t.customer_id, t.work_date, t.hours, t.start_time || '', t.end_time || '', t.notes || '', t.status, t.created_at, t.updated_at);
     }
     console.log(`  Restored ${data.tables.time_entries.length} time entries`);
   })();

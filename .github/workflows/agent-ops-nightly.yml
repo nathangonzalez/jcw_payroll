@@ -1,0 +1,16 @@
+name: Agent Ops Nightly (Skeleton)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '15 3 * * 1-5'
+
+jobs:
+  repo_scout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Repo map (placeholder)
+        run: |
+          echo "Repo-scout placeholder"
+          ls -la

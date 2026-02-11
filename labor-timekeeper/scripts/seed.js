@@ -40,8 +40,8 @@ db.transaction(() => {
   // Employees
   const insertEmployee = db.prepare(`
     INSERT OR IGNORE INTO employees
-      (id, name, pin_hash, default_bill_rate, default_pay_rate, is_admin, aliases_json, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      (id, name, default_bill_rate, default_pay_rate, is_admin, aliases_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
   `);
 
   for (const e of employees) {
@@ -50,7 +50,6 @@ db.transaction(() => {
     insertEmployee.run(
       id("emp_"),
       e.name,
-      "no-auth", // PIN not used - auth removed
       Number(e.default_bill_rate || 0),
       Number(e.default_pay_rate || 0),
       isAdmin,

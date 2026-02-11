@@ -5,6 +5,7 @@ test('debug dropdown stacking on page', async ({ page, baseURL }) => {
 
   // wait for employee select to load
   const sel = await page.waitForSelector('#employee');
+  await page.waitForFunction(() => document.querySelectorAll('#employee option').length > 1);
 
   // ensure options exist
   const options = await page.$$eval('#employee option', opts => opts.map(o => ({ value: o.value, text: o.textContent })));

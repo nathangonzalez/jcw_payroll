@@ -1,5 +1,5 @@
 # JCW Labor Timekeeper - Session Persistence
-# Last updated: January 13, 2026
+# Last updated: February 6, 2026
 
 ## PROJECT OVERVIEW
 Construction crew time tracking PWA with voice input and payroll export.
@@ -33,20 +33,42 @@ Invoke-RestMethod -Uri "$baseUrl/api/admin/seed" -Method POST
 ```
 
 ## CURRENT STATE / KNOWN ISSUES
-1. Load button in admin may not be working - needs testing
-2. Weekly export button needs testing
-3. Monthly report now includes dates per row (Date | Employee | Rate | Hours | Total)
-4. Select All checkbox added to approvals table
-5. Admin PIN gate working (7707)
+1. Admin PIN gate working (7707)
+2. 62 test entries imported for week 2026-01-28, SUBMITTED status
+3. Ready for admin approval at patch URL, then monthly report download for 2026-02
+4. Employee sheets now query FULL month range (not just first week) - fixed empty sheets bug
 
-## RECENT CHANGES (not yet verified working)
-- lib/export/generateMonthly.js: Added date column to each row instead of aggregating
+## RECENT CHANGES
+### Feb 6, 2026 - Payroll Export & Encoding Fixes (patch p-ui0206)
+- lib/export/generateMonthly.js: FIXED employee sheets empty bug (was querying only first week, now full month range)
+- public/app.html: Fixed UTF-16LE encoding (em dash, pin icon, delete button ✕)
+- public/admin.html: Fixed UTF-16LE encoding (📊📋✅❌🛠️🌱⚠️ emojis, em dash)
+- scripts/import_test_entries.mjs: NEW - imports exact payroll data (62 entries for week 2026-01-28)
+- scripts/fix_encoding.mjs: Utility to fix mojibake in UTF-16LE HTML files
+- 62 entries imported as SUBMITTED for: Boban Abbate, Doug Kinsey, Sean Matthew, Thomas Brinson, Jason Green, Phil Henderson
+- Customers covered: Behrens, Boyle, Gee, Landy, Lucas, Lynn, O'Connor, PTO, Schroeder, Theobald, Walsh, Watkins
+- Total hours: 242.75
+- Patch URL: https://p-ui0206-dot-labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com
+- Promote command: gcloud app services set-traffic labor-timekeeper --splits p-ui0206=1 --project=jcw-2-android-estimator --quiet
+
+### Feb 6, 2026 - Mobile UI Optimization (earlier in session)
+- public/app.html: Voice "Speak it" section now collapsible (collapsed by default)
+- public/app.html: Added "Hide Notes" / "Show Notes" toggle button on entries table
+- public/styles.css: Added mobile-first CSS (@media ≤640px) - larger buttons, full-width stacking
+
+### Previous (not yet verified)
 - public/admin.html: Added Select All checkbox, total row in approvals table
 - lib/secrets.js: Loads secrets from Google Secret Manager
 - Voice recording: Safari/iOS compatibility (webm/mp4/aac/ogg fallbacks)
- - server.js: Added admin simulation endpoint `/api/admin/simulate-week` to create sample entries for a given week
- - public/admin.html: Added "Simulate Week" button and checkboxes (Reset / Mark Submitted / Mark Approved)
- - public/app.html: Wired `Submit Week` button to backend (`submitWeek()`), and improved customer select behavior
+- server.js: Added admin simulation endpoint `/api/admin/simulate-week`
+- public/app.html: Wired `Submit Week` button to backend
+
+## RELEASE 1.1 DRAFT UPGRADES
+1. Voice review & edit step for parsed entries (edit customer/hours/date/notes before apply).
+2. Limited voice correction commands for the current parsed list (e.g., "change entry 2 customer to Hall").
+3. Inline edit for saved entries (customer, hours, notes) + one-tap delete.
+4. Voice suggestions from recent/favorite customers to reduce mis-matches.
+5. Front-end polish (clearer grouping, status feedback, quick-hour chips).
 
 ## KEY FILES
 - server.js: Express API server, main entry point

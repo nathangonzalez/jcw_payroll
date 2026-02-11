@@ -7,15 +7,17 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from 'url';
 import { openDb, id } from "./lib/db.js";
-import { weekStartYMD, weekDates, todayYMD, ymdToDate } from "./lib/time.js";
+import Database from "better-sqlite3";
+import { weekStartYMD, weekDates, todayYMD, ymdToDate, payrollMonthRange, payrollWeeksForMonth } from "./lib/time.js";
 import { transcribeAudio, parseVoiceCommand } from "./lib/voice.js";
 import { getOpenAI } from "./lib/openai.js";
 import { buildMonthlyWorkbook } from "./lib/export_excel.js";
 import { generateWeeklyExports } from "./lib/export/generateWeekly.js";
 import { generateMonthlyExport } from "./lib/export/generateMonthly.js";
 import { getHolidaysForYear, getHolidaysInRange } from "./lib/holidays.js";
+import { getBillRate } from "./lib/billing.js";
 import { sendMonthlyReport, sendEmail } from "./lib/email.js";
-import { archiveAndClearPayroll, listArchives, restoreFromCloud, scheduleBackups, backupToCloud } from "./lib/storage.js";
+import { archiveAndClearPayroll, listArchives, restoreFromCloud, downloadBackupTo, scheduleBackups, scheduleDailySnapshots, snapshotDailyToCloud, backupToCloud } from "./lib/storage.js";
 import { loadSecrets } from "./lib/secrets.js";
 import { migrate } from "./lib/migrate.js";
 import { ensureEmployees, getEmployeesDBOrDefault } from "./lib/bootstrap.js";
@@ -36,6 +38,49 @@ const app = express();
 // Ensure persistent DB is restored from Cloud Storage in production
 const DB_PATH = process.env.DATABASE_PATH || path.join(__dirname, 'data', 'app.db');
 process.env.DATABASE_PATH = DB_PATH;
+
+function shiftYmd(ymd, days) {
+  const d = ymdToDate(ymd);
+  d.setUTCDate(d.getUTCDate() + Number(days || 0));
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function getDefaultAdminWeekStart(db) {
+  const currentWeekStart = weekStartYMD(new Date());
+  const prevWeekStart = shiftYmd(currentWeekStart, -7);
+  const currentRange = weekDates(currentWeekStart);
+  const prevRange = weekDates(prevWeekStart);
+  const currentStart = currentRange.ordered[0]?.ymd || currentWeekStart;
+  const currentEnd = currentRange.ordered[6]?.ymd || currentWeekStart;
+  const prevStart = prevRange.ordered[0]?.ymd || prevWeekStart;
+  const prevEnd = prevRange.ordered[6]?.ymd || prevWeekStart;
+  const currentCount = db.prepare(`
+    SELECT COUNT(*) as c FROM time_entries
+    WHERE work_date >= ? AND work_date <= ? AND status = 'SUBMITTED'
+  `).get(currentStart, currentEnd)?.c || 0;
+  if (currentCount > 0) return currentWeekStart;
+  const prevCount = db.prepare(`
+    SELECT COUNT(*) as c FROM time_entries
+    WHERE work_date >= ? AND work_date <= ? AND status = 'SUBMITTED'
+  `).get(prevStart, prevEnd)?.c || 0;
+  if (prevCount > 0) return prevWeekStart;
+  return currentWeekStart;
+}
+
+function monthRange(ym) {
+  const payroll = payrollMonthRange(ym);
+  if (payroll) return payroll;
+  if (!/^\d{4}-\d{2}$/.test(String(ym || ''))) return null;
+  const [y, m] = ym.split('-').map(Number);
+  const start = `${y}-${String(m).padStart(2, '0')}-01`;
+  const next = new Date(Date.UTC(y, m, 1, 12, 0, 0));
+  next.setUTCDate(next.getUTCDate() - 1);
+  const end = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, '0')}-${String(next.getUTCDate()).padStart(2, '0')}`;
+  return { start, end };
+}
 
 if (process.env.NODE_ENV !== 'production') {
   const sidecars = [DB_PATH, `${DB_PATH}-wal`, `${DB_PATH}-shm`];
@@ -62,6 +107,9 @@ const db = openDb();
 if (process.env.NODE_ENV === 'production') {
   try {
     scheduleBackups(DB_PATH);
+    scheduleDailySnapshots(DB_PATH);
+    // Create one snapshot at boot so there is always at least one recent recovery point.
+    await snapshotDailyToCloud(DB_PATH);
   } catch (err) {
     console.warn('[startup] scheduleBackups failed', err?.message || err);
   }
@@ -69,6 +117,7 @@ if (process.env.NODE_ENV === 'production') {
 
 // Ensure DB schema is migrated (adds columns and seeds customers if empty)
 await migrate(db);
+ensureSystemCustomer('Lunch', '');
 
 // Ensure fallback/default employees are present in production only
 if (process.env.NODE_ENV === 'production') {
@@ -146,6 +195,18 @@ function ensureSimulationCustomers(sampleEntries) {
     if (!name) continue;
     insert.run(id('cust_'), name, address, now);
     existing.add(String(name).toLowerCase());
+  }
+}
+
+function ensureSystemCustomer(name, address = '') {
+  if (!name) return;
+  try {
+    const existing = db.prepare('SELECT id FROM customers WHERE LOWER(name) = LOWER(?)').get(name);
+    if (existing) return;
+    const now = new Date().toISOString();
+    db.prepare('INSERT INTO customers (id, name, address, created_at) VALUES (?, ?, ?, ?)').run(id('cust_'), name, address, now);
+  } catch (err) {
+    console.warn('[startup] ensureSystemCustomer failed', err?.message || err);
   }
 }
 
@@ -229,6 +290,41 @@ function ensureSimulationRates() {
   }
 
   return { employeesUpdated: updatedEmployees, overridesUpdated: updatedOverrides };
+}
+
+function formatYmd(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function round2(n) {
+  return Math.round(Number(n) * 100) / 100;
+}
+
+function getWeekStartsForMonthByWeekEnd(month) {
+  const payrollRange = payrollMonthRange(month);
+  if (payrollRange) {
+    const weeks = payrollWeeksForMonth(month);
+    const monthStart = payrollRange.start;
+    const nextMonth = shiftYmd(payrollRange.end, 1);
+    return { weeks, monthStart, nextMonth };
+  }
+  const monthStart = `${month}-01`;
+  const [y, m] = month.split('-').map(Number);
+  const nextMonth = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`;
+  const start = ymdToDate(monthStart);
+  const end = ymdToDate(nextMonth);
+  const firstWeekStart = weekStartYMD(ymdToDate(monthStart));
+  const weeks = [];
+  for (let d = ymdToDate(firstWeekStart); d < new Date(end.getTime() + 7 * 24 * 60 * 60 * 1000); d.setDate(d.getDate() + 7)) {
+    const weekStart = formatYmd(d);
+    const weekEnd = new Date(d);
+    weekEnd.setDate(weekEnd.getDate() + 6);
+    if (weekEnd >= start && weekEnd < end) weeks.push(weekStart);
+  }
+  return { weeks, monthStart, nextMonth };
 }
 
 function buildStressSampleEntries() {
@@ -341,6 +437,16 @@ app.get('/api/admin/list-test-entries', (req, res) => {
 });
 
 // Admin: clear entries that were seeded by the simulate functions (notes contain 'Seeded sample hours')
+app.post('/api/admin/clear-comments', (req, res) => {
+  try {
+    const r = db.prepare('DELETE FROM weekly_comments').run();
+    res.json({ ok: true, deleted: r.changes || 0 });
+  } catch (err) {
+    console.error('[admin/clear-comments]', err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
 app.post('/api/admin/clear-seeded-entries', (req, res) => {
   try {
     const adminSecret = process.env.ADMIN_SECRET;
@@ -433,66 +539,63 @@ app.get("/api/time-entries", (req, res) => {
     JOIN customers c ON c.id = te.customer_id
     WHERE te.employee_id = ?
       AND te.work_date >= ? AND te.work_date <= ?
-    ORDER BY te.work_date ASC
+    ORDER BY te.work_date ASC, te.start_time ASC, te.created_at ASC
   `).all(employeeId, start, end);
 
   res.json({ week_start: weekStart, days: ordered, entries: rows });
 });
 
 app.post("/api/time-entries", (req, res) => {
-  const { employee_id, customer_id, work_date, hours, notes } = req.body || {};
-  if (!employee_id || !customer_id || !work_date || hours == null) {
-    return res.status(400).json({ error: "employee_id, customer_id, work_date, hours required" });
+  const { id: entryId, employee_id, customer_id, work_date, hours, notes, start_time, end_time } = req.body || {};
+  if (!employee_id || !customer_id || !work_date) {
+    return res.status(400).json({ error: "employee_id, customer_id, work_date required" });
   }
   const now = new Date().toISOString();
-
-  // Upsert per employee+customer+date (keeps UI simple)
-  const existing = db.prepare(`
-    SELECT id, status FROM time_entries
-    WHERE employee_id = ? AND customer_id = ? AND work_date = ?
-  `).get(employee_id, customer_id, work_date);
-
-  if (existing && (existing.status === "SUBMITTED" || existing.status === "APPROVED")) {
-    return res.status(409).json({ error: "Entry is locked (submitted/approved)" });
+  const calcHours = () => {
+    if (start_time && end_time) {
+      const [sh, sm] = String(start_time).split(':').map(Number);
+      const [eh, em] = String(end_time).split(':').map(Number);
+      if (!Number.isFinite(sh) || !Number.isFinite(sm) || !Number.isFinite(eh) || !Number.isFinite(em)) return null;
+      const start = sh + (sm / 60);
+      const end = eh + (em / 60);
+      return end >= start ? Math.round((end - start) * 100) / 100 : null;
+    }
+    return null;
+  };
+  const resolvedHours = hours != null ? Number(hours) : calcHours();
+  if (resolvedHours == null || !Number.isFinite(resolvedHours)) {
+    return res.status(400).json({ error: "hours or valid start_time/end_time required" });
+  }
+  let resolvedStart = String(start_time || "");
+  let resolvedEnd = String(end_time || "");
+  // Total-hours mode: when only hours are provided, stamp a standard PM window.
+  if (!resolvedStart && !resolvedEnd && hours != null) {
+    resolvedStart = "07:30";
+    resolvedEnd = "16:00";
   }
 
-  if (!existing) {
-    db.prepare(`
-      INSERT INTO time_entries
-        (id, employee_id, customer_id, work_date, hours, notes, status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'DRAFT', ?, ?)
-    `).run(id("te_"), employee_id, customer_id, work_date, Number(hours), String(notes || ""), now, now);
-  } else {
+  if (entryId) {
+    const existing = db.prepare(`
+      SELECT id, status FROM time_entries WHERE id = ?
+    `).get(entryId);
+    if (!existing) return res.status(404).json({ error: "entry not found" });
+    if (existing.status === "APPROVED") {
+      return res.status(409).json({ error: "Entry is locked (approved)" });
+    }
     db.prepare(`
       UPDATE time_entries
-      SET hours = ?, notes = ?, updated_at = ?
+      SET customer_id = ?, work_date = ?, hours = ?, start_time = ?, end_time = ?, notes = ?, updated_at = ?
       WHERE id = ?
-    `).run(Number(hours), String(notes || ""), now, existing.id);
+    `).run(customer_id, work_date, resolvedHours, resolvedStart, resolvedEnd, String(notes || ""), now, entryId);
+  } else {
+    db.prepare(`
+      INSERT INTO time_entries
+        (id, employee_id, customer_id, work_date, hours, start_time, end_time, notes, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT', ?, ?)
+    `).run(id("te_"), employee_id, customer_id, work_date, resolvedHours, resolvedStart, resolvedEnd, String(notes || ""), now, now);
   }
 
-  // Notify admin via email about new/updated time entry (best-effort)
-  (async () => {
-    try {
-      const emp = db.prepare('SELECT id, name FROM employees WHERE id = ?').get(employee_id);
-      const cust = db.prepare('SELECT id, name FROM customers WHERE id = ?').get(customer_id);
-      const subject = `Time entry ${existing ? 'updated' : 'created'}: ${emp?.name || employee_id}`;
-      const text = `A time entry was ${existing ? 'updated' : 'created'}.
-
-Employee: ${emp?.name || employee_id}
-Customer: ${cust?.name || customer_id}
-Date: ${work_date}
-Hours: ${hours}
-Notes: ${notes || ''}
-
-View admin approvals: ${process.env.BASE_URL || 'http://localhost:3000'}/admin
-`;
-      const to = process.env.EMAIL_TO || 'nathan@jcwelton.com';
-      await sendEmail({ to, subject, text });
-    } catch (err) {
-      console.warn('[email] Failed to send time-entry notification', err?.message || err);
-    }
-  })();
-
+  console.log('[audit] time-entry', JSON.stringify({ employee_id, customer_id, work_date, hours: resolvedHours, start_time: resolvedStart, end_time: resolvedEnd, status: entryId ? 'UPDATED' : 'DRAFT', entry_id: entryId || undefined }));
   res.json({ ok: true });
 });
 
@@ -518,8 +621,29 @@ app.delete('/api/time-entries/:id', (req, res) => {
   }
 });
 
-app.post("/api/submit-week", (req, res) => {
-  const { employee_id, week_start } = req.body || {};
+app.post("/api/time-entries/clear-drafts", (req, res) => {
+  try {
+    const { employee_id, week_start } = req.body || {};
+    if (!employee_id) return res.status(400).json({ error: "employee_id required" });
+    const ws = String(week_start || weekStartYMD(new Date()));
+    const { ordered } = weekDates(ws);
+    const start = ordered[0].ymd;
+    const end = ordered[6].ymd;
+    const r = db.prepare(`
+      DELETE FROM time_entries
+      WHERE employee_id = ?
+        AND work_date >= ? AND work_date <= ?
+        AND (status = 'DRAFT' OR status IS NULL)
+    `).run(employee_id, start, end);
+    res.json({ ok: true, deleted: r.changes || 0 });
+  } catch (err) {
+    console.error('[time-entries/clear-drafts]', err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+app.post("/api/submit-week", async (req, res) => {
+  const { employee_id, week_start, comment } = req.body || {};
   if (!employee_id) return res.status(400).json({ error: "employee_id required" });
 
   const ws = String(week_start || weekStartYMD(new Date()));
@@ -527,7 +651,7 @@ app.post("/api/submit-week", (req, res) => {
   const start = ordered[0].ymd;
   const end = ordered[6].ymd;
 
-  db.prepare(`
+  const submitResult = db.prepare(`
     UPDATE time_entries
     SET status = 'SUBMITTED', updated_at = ?
     WHERE employee_id = ?
@@ -535,12 +659,98 @@ app.post("/api/submit-week", (req, res) => {
       AND (status = 'DRAFT' OR status IS NULL)
   `).run(new Date().toISOString(), employee_id, start, end);
 
+  if (typeof comment === 'string' && comment.trim()) {
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO weekly_comments (id, employee_id, week_start, comment, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(employee_id, week_start) DO UPDATE SET
+        comment = excluded.comment,
+        updated_at = excluded.updated_at
+    `).run(id('wc_'), employee_id, ws, comment.trim(), now, now);
+  }
+
+  try {
+    await backupToCloud(DB_PATH);
+  } catch (err) {
+    console.warn('[submit-week] backupToCloud failed', err?.message || err);
+  }
+
+  // Notify admin via email on submit-week (best-effort)
+  (async () => {
+    try {
+      if ((submitResult?.changes || 0) <= 0) return;
+      const emp = db.prepare('SELECT id, name FROM employees WHERE id = ?').get(employee_id);
+      const totals = db.prepare(`
+        SELECT
+          COUNT(*) as entries,
+          SUM(hours) as hours
+        FROM time_entries
+        WHERE employee_id = ?
+          AND work_date >= ? AND work_date <= ?
+          AND status = 'SUBMITTED'
+      `).get(employee_id, start, end);
+      const subject = `Week submitted: ${emp?.name || employee_id} (${ws})`;
+      const text = `Weekly hours submitted.
+
+Employee: ${emp?.name || employee_id}
+Week: ${start} to ${end}
+Entries: ${totals?.entries || 0}
+Hours: ${Number(totals?.hours || 0).toFixed(2)}
+Comment: ${typeof comment === 'string' ? comment.trim() : ''}
+
+View admin approvals: ${process.env.BASE_URL || 'http://localhost:3000'}/admin
+`;
+      const to = process.env.EMAIL_TO || 'nathan@jcwelton.com';
+      await sendEmail({ to, subject, text });
+    } catch (err) {
+      console.warn('[email] Failed to send submit-week notification', err?.message || err);
+    }
+  })();
+
+  console.log('[audit] submit-week', JSON.stringify({ employee_id, week_start: ws, submitted: submitResult?.changes || 0 }));
   res.json({ ok: true, week_start: ws });
+});
+
+/** Allow employee to reopen their submitted week (back to DRAFT) */
+app.post("/api/unsubmit-week", (req, res) => {
+  const { employee_id, week_start } = req.body || {};
+  if (!employee_id) return res.status(400).json({ error: "employee_id required" });
+  const ws = String(week_start || weekStartYMD(new Date()));
+  const { ordered } = weekDates(ws);
+  const start = ordered[0]?.ymd;
+  const end = ordered[6]?.ymd;
+  if (!start || !end) return res.status(400).json({ error: "Invalid week_start" });
+  const stmt = db.prepare(`
+    UPDATE time_entries
+    SET status = 'DRAFT', updated_at = ?
+    WHERE employee_id = ?
+      AND work_date >= ? AND work_date <= ?
+      AND status = 'SUBMITTED'
+  `);
+  const now = new Date().toISOString();
+  const result = stmt.run(now, employee_id, start, end);
+  res.json({ ok: true, week_start: ws, reopened: result.changes || 0 });
+});
+
+app.get("/api/weekly-comment", (req, res) => {
+  try {
+    const employeeId = req.query.employee_id;
+    if (!employeeId) return res.status(400).json({ error: "employee_id required" });
+    const weekStart = String(req.query.week_start || weekStartYMD(new Date()));
+    const row = db.prepare(`
+      SELECT comment FROM weekly_comments
+      WHERE employee_id = ? AND week_start = ?
+    `).get(employeeId, weekStart);
+    res.json({ ok: true, week_start: weekStart, comment: row?.comment || "" });
+  } catch (err) {
+    res.status(500).json({ error: String(err?.message || err) });
+  }
 });
 
 /** Admin approvals - no auth, anyone can view/approve for now */
 app.get("/api/approvals", (req, res) => {
-  const weekStart = String(req.query.week_start || weekStartYMD(new Date()));
+  const weekStart = String(req.query.week_start || getDefaultAdminWeekStart(db));
   const { ordered } = weekDates(weekStart);
   const start = ordered[0].ymd;
   const end = ordered[6].ymd;
@@ -555,10 +765,42 @@ app.get("/api/approvals", (req, res) => {
     ORDER BY te.work_date ASC, e.name ASC
   `).all(start, end);
 
-  res.json({ week_start: weekStart, days: ordered, submitted: rows });
+  const comments = db.prepare(`
+    SELECT wc.employee_id, wc.comment, e.name as employee_name
+    FROM weekly_comments wc
+    JOIN employees e ON e.id = wc.employee_id
+    WHERE wc.week_start = ?
+  `).all(weekStart);
+
+  res.json({ week_start: weekStart, days: ordered, submitted: rows, comments });
 });
 
-app.post("/api/approve", (req, res) => {
+// Admin: list week starts that have entries in a given month
+app.get("/api/admin/weeks", (req, res) => {
+  const month = String(req.query.month || '').trim();
+  const range = monthRange(month);
+  if (!range) return res.status(400).json({ error: "month=YYYY-MM required" });
+  const { start, end } = range;
+  const weeksFromCalendar = payrollWeeksForMonth(month);
+  if (weeksFromCalendar.length) {
+    return res.json({ weeks: weeksFromCalendar });
+  }
+  const rows = db.prepare(`
+    SELECT DISTINCT work_date
+    FROM time_entries
+    WHERE work_date >= ? AND work_date <= ?
+    ORDER BY work_date DESC
+  `).all(start, end);
+  const weeks = new Set();
+  for (const r of rows) {
+    if (!r.work_date) continue;
+    const ws = weekStartYMD(ymdToDate(r.work_date));
+    weeks.add(ws);
+  }
+  res.json({ weeks: Array.from(weeks).sort().reverse() });
+});
+
+app.post("/api/approve", async (req, res) => {
   const ids = req.body?.ids;
   if (!Array.isArray(ids) || ids.length === 0) return res.status(400).json({ error: "ids[] required" });
 
@@ -569,7 +811,138 @@ app.post("/api/approve", (req, res) => {
   });
   tx();
 
+  try {
+    await backupToCloud(DB_PATH);
+  } catch (err) {
+    console.warn('[approve] backupToCloud failed', err?.message || err);
+  }
+
   res.json({ ok: true, approved: ids.length });
+});
+
+// Admin preview of monthly report (HTML-friendly data)
+app.get("/api/admin/report-preview", (req, res) => {
+  try {
+    const month = String(req.query.month || "").trim();
+    if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: "month=YYYY-MM required" });
+    const { weeks, monthStart, nextMonth } = getWeekStartsForMonthByWeekEnd(month);
+    const weekSet = new Set(weeks);
+    const rangeStart = weeks[0] || monthStart;
+    const rangeEnd = (() => {
+      const last = weeks[weeks.length - 1];
+      if (!last) return nextMonth;
+      const d = ymdToDate(last);
+      d.setDate(d.getDate() + 6);
+      return formatYmd(d);
+    })();
+
+    const rows = db.prepare(`
+      SELECT te.*, e.name as employee_name, c.name as customer_name
+      FROM time_entries te
+      JOIN employees e ON e.id = te.employee_id
+      JOIN customers c ON c.id = te.customer_id
+      WHERE te.work_date >= ? AND te.work_date <= ?
+        AND te.status = 'APPROVED'
+      ORDER BY te.work_date ASC, e.name ASC
+    `).all(rangeStart, rangeEnd);
+
+    const perEmployee = new Map();
+    const perEmpDate = new Map();
+    let totalHours = 0;
+    let totalBilled = 0;
+    let totalEntries = 0;
+    for (const r of rows) {
+      const weekStart = weekStartYMD(ymdToDate(r.work_date));
+      if (!weekSet.has(weekStart)) continue;
+      const isLunch = String(r.customer_name || '').toLowerCase() === 'lunch' || String(r.notes || '').toLowerCase().includes('lunch');
+      const key = `${r.employee_id}::${r.work_date}`;
+      if (!perEmpDate.has(key)) perEmpDate.set(key, { employee_id: r.employee_id, employee_name: r.employee_name, work: 0, lunch: 0, rows: [] });
+      const bucket = perEmpDate.get(key);
+      const hours = Number(r.hours || 0);
+      if (isLunch) bucket.lunch += hours;
+      else {
+        bucket.work += hours;
+        bucket.rows.push(r);
+        totalEntries += 1;
+      }
+    }
+    for (const bucket of perEmpDate.values()) {
+      const netHours = Math.max(0, Number(bucket.work) - Number(bucket.lunch));
+      if (!perEmployee.has(bucket.employee_id)) {
+        perEmployee.set(bucket.employee_id, { employee_id: bucket.employee_id, employee_name: bucket.employee_name, hours: 0, billed: 0 });
+      }
+      const agg = perEmployee.get(bucket.employee_id);
+      agg.hours += netHours;
+      totalHours += netHours;
+      // approximate billed by applying rates per row, then scale for lunch deduction if needed
+      let billed = 0;
+      for (const r of bucket.rows) {
+        const rate = getBillRate(db, r.employee_id, r.customer_id);
+        billed += Number(r.hours || 0) * rate;
+      }
+      if (bucket.work > 0 && bucket.lunch > 0) {
+        billed = billed * (netHours / bucket.work);
+      }
+      agg.billed += billed;
+      totalBilled += billed;
+    }
+
+    // Build per-week breakdown: week -> customer -> [{ employee, hours, billed }]
+    const byWeekMap = new Map();
+    for (const bucket of perEmpDate.values()) {
+      for (const r of bucket.rows) {
+        const ws = weekStartYMD(ymdToDate(r.work_date));
+        if (!weekSet.has(ws)) continue;
+        if (!byWeekMap.has(ws)) byWeekMap.set(ws, new Map());
+        const custMap = byWeekMap.get(ws);
+        const custKey = r.customer_name;
+        if (!custMap.has(custKey)) custMap.set(custKey, new Map());
+        const empMap = custMap.get(custKey);
+        if (!empMap.has(r.employee_id)) empMap.set(r.employee_id, { employee_name: bucket.employee_name, hours: 0, billed: 0 });
+        const emp = empMap.get(r.employee_id);
+        const rate = getBillRate(db, r.employee_id, r.customer_id);
+        emp.hours += Number(r.hours || 0);
+        emp.billed += Number(r.hours || 0) * rate;
+      }
+    }
+    const byWeek = [...byWeekMap.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0])) // newest first
+      .map(([ws, custMap]) => {
+        let weekHours = 0, weekBilled = 0;
+        const customers = [...custMap.entries()]
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .map(([custName, empMap]) => {
+            const employees = [...empMap.values()].sort((a, b) => a.employee_name.localeCompare(b.employee_name));
+            const custHours = employees.reduce((s, e) => s + e.hours, 0);
+            const custBilled = employees.reduce((s, e) => s + e.billed, 0);
+            weekHours += custHours;
+            weekBilled += custBilled;
+            return { customer: custName, hours: round2(custHours), billed: round2(custBilled), employees: employees.map(e => ({ ...e, hours: round2(e.hours), billed: round2(e.billed) })) };
+          });
+        return { weekStart: ws, hours: round2(weekHours), billed: round2(weekBilled), customers };
+      });
+
+    const comments = weeks.length
+      ? db.prepare(`
+          SELECT wc.week_start, wc.comment, e.name as employee_name
+          FROM weekly_comments wc
+          JOIN employees e ON e.id = wc.employee_id
+          WHERE wc.week_start IN (${weeks.map(() => '?').join(',')})
+        `).all(...weeks)
+      : [];
+
+    res.json({
+      ok: true,
+      month,
+      weeks,
+      totals: { entries: totalEntries, hours: round2(totalHours), billed: round2(totalBilled) },
+      employees: [...perEmployee.values()].sort((a, b) => a.employee_name.localeCompare(b.employee_name)),
+      byWeek,
+      comments
+    });
+  } catch (err) {
+    res.status(500).json({ error: String(err?.message || err) });
+  }
 });
 
 /** Voice: upload audio -> transcribe -> parse -> return proposed entries */
@@ -613,7 +986,33 @@ app.get("/api/export/monthly", async (req, res) => {
   }
 });
 
+/** Billing Report - same format as monthly but with client-facing billing rates */
+app.get("/api/export/monthly-billing", async (req, res) => {
+  try {
+    const month = String(req.query.month || "").trim();
+    if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: "month=YYYY-MM required" });
 
+    const billingRates = {
+      "Boban Abbate": 90,
+      "Chris Zavesky": 90,
+      "Chris Jacobi": 90,
+      "Thomas Brinson": 90,
+      "Phil Henderson": 90,
+      "Jason Green": 75,
+      "Doug Kinsey": 65,
+      "Sean Matthew": 40
+    };
+
+    const result = await generateMonthlyExport({ db, month, billingRates });
+    const fileBuffer = fs.readFileSync(result.filepath);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${result.filename}"`);
+    res.send(fileBuffer);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
 
 /** ============================================================
  *  Option A - Functional XLSX Pipeline Endpoints
@@ -921,8 +1320,8 @@ app.post("/api/admin/seed", async (req, res) => {
     // Employees
     const insertEmp = db.prepare(`
       INSERT OR IGNORE INTO employees
-        (id, name, pin_hash, default_bill_rate, default_pay_rate, is_admin, aliases_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        (id, name, default_bill_rate, default_pay_rate, is_admin, aliases_json, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
     
     let empCount = 0;
@@ -931,7 +1330,6 @@ app.post("/api/admin/seed", async (req, res) => {
       const result = insertEmp.run(
         id("emp_"),
         e.name,
-        "no-auth",
         Number(e.default_bill_rate || 0),
         Number(e.default_pay_rate || 0),
         isAdmin,
@@ -1449,17 +1847,21 @@ app.post('/api/admin/simulate-month', async (req, res) => {
     const { month, reset = false, submit = false, approve = false } = req.body || {};
     if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: 'month=YYYY-MM required' });
 
-    // compute month start and next month start
+    const payrollRange = payrollMonthRange(month);
+    const monthStart = payrollRange?.start || `${month}-01`;
     const [y, m] = month.split('-').map(Number);
-    const monthStart = `${month}-01`;
-    const nextMonth = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`;
+    const nextMonth = payrollRange?.end
+      ? shiftYmd(payrollRange.end, 1)
+      : (m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`);
 
-    // compute payroll week starts (defaults to Wednesday) that intersect the month
-    const weeks = [];
-    const firstWeekStart = weekStartYMD(ymdToDate(monthStart));
-    const end = ymdToDate(nextMonth);
-    for (let d = ymdToDate(firstWeekStart); d < end; d.setDate(d.getDate() + 7)) {
-      weeks.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+    // compute payroll week starts for the payroll month
+    const weeks = payrollWeeksForMonth(month);
+    if (!weeks.length) {
+      const firstWeekStart = weekStartYMD(ymdToDate(monthStart));
+      const end = ymdToDate(nextMonth);
+      for (let d = ymdToDate(firstWeekStart); d < end; d.setDate(d.getDate() + 7)) {
+        weeks.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+      }
     }
 
     const ratesSeeded = ensureSimulationRates();
@@ -1581,17 +1983,37 @@ app.post("/api/admin/reconcile", async (req, res) => {
       return res.status(400).json({ error: "month required in YYYY-MM format" });
     }
     
-    // Get preview of what will be archived
-    const preview = db.prepare(`
-      SELECT
-        COUNT(*) as count,
-        SUM(te.hours) as totalHours,
-        SUM(te.hours * COALESCE(ro.bill_rate, e.default_bill_rate)) as totalBilled
+    // Get payroll month range (payroll weeks, not calendar month)
+    const { weeks, monthStart, nextMonth } = getWeekStartsForMonthByWeekEnd(month);
+    const weekSet = new Set(weeks);
+    const rangeStart = weeks[0] || monthStart;
+    const rangeEnd = (() => {
+      const last = weeks[weeks.length - 1];
+      if (!last) return nextMonth;
+      const d = ymdToDate(last);
+      d.setDate(d.getDate() + 6);
+      return formatYmd(d);
+    })();
+
+    // Get preview of what will be archived (using payroll month range)
+    const allEntries = db.prepare(`
+      SELECT te.*, e.default_bill_rate,
+        COALESCE(ro.bill_rate, e.default_bill_rate) as eff_rate
       FROM time_entries te
       JOIN employees e ON e.id = te.employee_id
       LEFT JOIN rate_overrides ro ON ro.employee_id = te.employee_id AND ro.customer_id = te.customer_id
-      WHERE te.work_date LIKE ?
-    `).get(`${month}%`);
+      WHERE te.work_date >= ? AND te.work_date <= ?
+    `).all(rangeStart, rangeEnd);
+    // Filter to only entries in valid payroll weeks
+    const filtered = allEntries.filter(r => {
+      const ws = weekStartYMD(ymdToDate(r.work_date));
+      return weekSet.has(ws);
+    });
+    const preview = {
+      count: filtered.length,
+      totalHours: filtered.reduce((s, r) => s + Number(r.hours || 0), 0),
+      totalBilled: filtered.reduce((s, r) => s + Number(r.hours || 0) * Number(r.eff_rate || 0), 0)
+    };
     
     if (!confirm) {
       // Return preview without clearing
@@ -1621,6 +2043,160 @@ app.post("/api/admin/reconcile", async (req, res) => {
   }
 });
 
+/** Admin: Restore latest DB from Cloud Storage and restart instance
+ * POST /api/admin/restore-latest
+ */
+app.post("/api/admin/restore-latest", async (req, res) => {
+  try {
+    const adminSecret = process.env.ADMIN_SECRET;
+    const provided = req.headers['x-admin-secret'] || req.body?.admin_secret;
+    if (adminSecret && provided !== adminSecret) return res.status(403).json({ error: 'admin secret required' });
+    const restored = await restoreFromCloud(DB_PATH);
+    res.json({ ok: true, restored });
+    setTimeout(() => process.exit(0), 500);
+  } catch (err) {
+    console.error('[admin/restore-latest]', err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+/** Admin: Import custom time entries (for patch seeding/testing)
+ * POST /api/admin/import-entries
+ * Body: { entries: [{ employee, customer, work_date, hours, notes?, status? }], default_status?: 'SUBMITTED'|'APPROVED'|'DRAFT' }
+ * If ADMIN_SECRET env var is set, client must send header 'x-admin-secret' or body.admin_secret matching it.
+ */
+app.post('/api/admin/import-entries', async (req, res) => {
+  try {
+    const adminSecret = process.env.ADMIN_SECRET;
+    const provided = req.headers['x-admin-secret'] || req.body?.admin_secret;
+    if (adminSecret && provided !== adminSecret) {
+      return res.status(403).json({ error: 'admin secret required' });
+    }
+
+    const entries = req.body?.entries;
+    if (!Array.isArray(entries) || entries.length === 0) {
+      return res.status(400).json({ error: 'entries[] required' });
+    }
+
+    const defaultStatus = String(req.body?.default_status || 'SUBMITTED').toUpperCase();
+    const allowed = new Set(['DRAFT', 'SUBMITTED', 'APPROVED']);
+    const statusFallback = allowed.has(defaultStatus) ? defaultStatus : 'SUBMITTED';
+
+    const employees = db.prepare('SELECT id, name, aliases_json FROM employees').all();
+    const customers = db.prepare('SELECT id, name FROM customers').all();
+    const empMap = new Map();
+    for (const e of employees) {
+      empMap.set(String(e.name || '').toLowerCase(), e);
+      try {
+        const aliases = e.aliases_json ? JSON.parse(e.aliases_json) : [];
+        for (const a of aliases || []) empMap.set(String(a).toLowerCase(), e);
+      } catch {}
+    }
+    const custMap = new Map(customers.map(c => [String(c.name || '').toLowerCase(), c]));
+
+    let created = 0;
+    const skipped = [];
+    const nowTs = new Date().toISOString();
+    const insert = db.prepare(`
+      INSERT INTO time_entries (id, employee_id, customer_id, work_date, hours, notes, status, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const tx = db.transaction(() => {
+      for (const r of entries) {
+        const empKey = String(r.employee || '').trim().toLowerCase();
+        const custKey = String(r.customer || '').trim().toLowerCase();
+        const workDate = String(r.work_date || '').trim();
+        const hours = Number(r.hours || 0);
+        if (!empKey || !custKey || !/^\d{4}-\d{2}-\d{2}$/.test(workDate) || !Number.isFinite(hours)) {
+          skipped.push({ entry: r, reason: 'invalid fields' });
+          continue;
+        }
+        let emp = empMap.get(empKey);
+        if (!emp) emp = employees.find(e => String(e.name || '').toLowerCase().includes(empKey));
+        let cust = custMap.get(custKey);
+        if (!cust) cust = customers.find(c => String(c.name || '').toLowerCase().includes(custKey));
+        if (!emp || !cust) {
+          skipped.push({ entry: r, reason: !emp ? 'employee' : 'customer' });
+          continue;
+        }
+        const status = allowed.has(String(r.status || '').toUpperCase()) ? String(r.status || '').toUpperCase() : statusFallback;
+        insert.run(id('te_'), emp.id, cust.id, workDate, hours, r.notes || '', status, nowTs, nowTs);
+        created += 1;
+      }
+    });
+    tx();
+
+    if (process.env.NODE_ENV === 'production') {
+      try {
+        await backupToCloud(DB_PATH);
+      } catch (err) {
+        console.warn('[admin/import-entries] backupToCloud failed', err?.message || err);
+      }
+    }
+
+    res.json({ ok: true, created, skipped });
+  } catch (err) {
+    console.error('[admin/import-entries]', err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+/** Admin: Restore latest DB from Cloud Storage into current DB (merge)
+ * POST /api/admin/restore-latest-merge
+ */
+app.post("/api/admin/restore-latest-merge", async (req, res) => {
+  try {
+    const adminSecret = process.env.ADMIN_SECRET;
+    const provided = req.headers['x-admin-secret'] || req.body?.admin_secret;
+    if (adminSecret && provided !== adminSecret) return res.status(403).json({ error: 'admin secret required' });
+
+    const tmpPath = `${DB_PATH}.restore.${Date.now()}`;
+    const downloaded = await downloadBackupTo(tmpPath);
+    if (!downloaded) return res.status(500).json({ error: 'failed to download backup' });
+
+    const srcDb = new Database(tmpPath, { readonly: true });
+    const srcEmployees = srcDb.prepare('SELECT * FROM employees').all();
+    const srcCustomers = srcDb.prepare('SELECT * FROM customers').all();
+    const srcOverrides = srcDb.prepare('SELECT * FROM rate_overrides').all();
+    const srcEntries = srcDb.prepare('SELECT * FROM time_entries').all();
+    const srcComments = srcDb.prepare('SELECT * FROM weekly_comments').all();
+
+    const tx = db.transaction(() => {
+      db.exec('PRAGMA foreign_keys=OFF;');
+      db.exec('DELETE FROM time_entries;');
+      db.exec('DELETE FROM weekly_comments;');
+      db.exec('DELETE FROM rate_overrides;');
+      db.exec('DELETE FROM customers;');
+      db.exec('DELETE FROM employees;');
+
+      const insertEmp = db.prepare('INSERT INTO employees (id, name, default_bill_rate, default_pay_rate, is_admin, aliases_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+      for (const r of srcEmployees) insertEmp.run(r.id, r.name, r.default_bill_rate, r.default_pay_rate, r.is_admin, r.aliases_json, r.created_at);
+
+      const insertCust = db.prepare('INSERT INTO customers (id, name, address, created_at) VALUES (?, ?, ?, ?)');
+      for (const r of srcCustomers) insertCust.run(r.id, r.name, r.address || '', r.created_at);
+
+      const insertOv = db.prepare('INSERT INTO rate_overrides (id, employee_id, customer_id, bill_rate, created_at) VALUES (?, ?, ?, ?, ?)');
+      for (const r of srcOverrides) insertOv.run(r.id, r.employee_id, r.customer_id, r.bill_rate, r.created_at);
+
+      const insertTe = db.prepare('INSERT INTO time_entries (id, employee_id, customer_id, work_date, hours, start_time, end_time, notes, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      for (const r of srcEntries) insertTe.run(r.id, r.employee_id, r.customer_id, r.work_date, r.hours, r.start_time || '', r.end_time || '', r.notes || '', r.status, r.created_at, r.updated_at);
+
+      const insertWc = db.prepare('INSERT INTO weekly_comments (id, employee_id, week_start, comment, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)');
+      for (const r of srcComments) insertWc.run(r.id, r.employee_id, r.week_start, r.comment || '', r.created_at, r.updated_at);
+
+      db.exec('PRAGMA foreign_keys=ON;');
+    });
+    tx();
+    srcDb.close();
+
+    res.json({ ok: true, restored: true });
+  } catch (err) {
+    console.error('[admin/restore-latest-merge]', err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
 /** Admin: List archived payroll months */
 app.get("/api/admin/archives", async (req, res) => {
   try {
@@ -1643,3 +2219,20 @@ const port = Number(process.env.PORT || 3000);
 app.listen(port, () => {
   console.log(`Labor Timekeeper running on http://localhost:${port}`);
 });
+
+// ── Graceful shutdown: flush DB to GCS before the instance dies ──────
+// GAE sends SIGTERM before shutting down an instance. Without this handler,
+// any writes since the last 5-minute scheduled backup would be lost because
+// /tmp is ephemeral.
+async function gracefulShutdown(signal) {
+  console.log(`[shutdown] Received ${signal} — flushing database to Cloud Storage…`);
+  try {
+    await backupToCloud(DB_PATH);
+    console.log('[shutdown] Final backup completed successfully');
+  } catch (err) {
+    console.error('[shutdown] Final backup FAILED:', err?.message || err);
+  }
+  process.exit(0);
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT',  () => gracefulShutdown('SIGINT'));

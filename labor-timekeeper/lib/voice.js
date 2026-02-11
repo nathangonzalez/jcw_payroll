@@ -13,6 +13,8 @@ export const VoiceParseSchema = z.object({
       // allow direct date too (YYYY-MM-DD)
       work_date: z.string().nullable().optional(),
       hours: z.number(),
+      start_time: z.string().nullable().optional(),
+      end_time: z.string().nullable().optional(),
       notes: z.string().nullable().optional()
     })
   )
@@ -43,6 +45,7 @@ export async function parseVoiceCommand({ text, customers, referenceDate }) {
   const openai = getOpenAI();
   if (!openai) throw new Error("OPENAI_API_KEY is not set");
 
+  const normalizedText = normalizeCompactTimes(text || "");
   const nowYmd = todayYMD();
   const weekStart = weekStartYMD(referenceDate ?? new Date());
   const { map, ordered } = weekDates(weekStart);
@@ -58,7 +61,11 @@ export async function parseVoiceCommand({ text, customers, referenceDate }) {
     `- Today (America/New_York) is ${nowYmd}.`,
     "- If day is omitted, assume the user means today.",
     "- Hours are numeric (allow decimals like 7.5).",
+    "- If a time range is spoken, include start_time and end_time in 24-hour HH:MM format.",
     "- Customer must be chosen from the provided customer list; if not sure, pick the closest match.",
+    "- Treat 'lunch' (including mishears like 'launch') as a special customer named Lunch even if it is not in the list.",
+    "- If a day is stated once, apply it to subsequent entries until another day is stated.",
+    "- Normalize compact times like 730 -> 07:30 and 330 -> 03:30; if two compact times appear back-to-back, treat them as start_time and end_time.",
     "- Do not invent employees or rates; only output what you can parse from the command.",
     "",
     "Customer list:",
@@ -71,7 +78,7 @@ export async function parseVoiceCommand({ text, customers, referenceDate }) {
     model: "gpt-4o-mini",
     input: [
       { role: "system", content: system },
-      { role: "user", content: `Command: ${text}\n\nOutput JSON only.` }
+      { role: "user", content: `Command: ${normalizedText}\n\nOutput JSON only.` }
     ],
     text: {
       format: {
@@ -88,12 +95,14 @@ export async function parseVoiceCommand({ text, customers, referenceDate }) {
               items: {
                 type: "object",
                 additionalProperties: false,
-                required: ["customer", "day", "work_date", "hours", "notes"],
+                required: ["customer", "day", "work_date", "hours", "start_time", "end_time", "notes"],
                 properties: {
                   customer: { type: "string" },
                   day: { type: ["string", "null"], enum: ["mon","tue","wed","thu","fri","sat","sun", null] },
                   work_date: { type: ["string", "null"] },
                   hours: { type: "number" },
+                  start_time: { type: ["string", "null"] },
+                  end_time: { type: ["string", "null"] },
                   notes: { type: ["string", "null"] }
                 }
               }
@@ -110,21 +119,55 @@ export async function parseVoiceCommand({ text, customers, referenceDate }) {
   // Resolve customer names robustly with Fuse, then map weekday->date.
   const fuse = new Fuse(customers, { keys: ["name"], threshold: 0.35 });
 
-  const resolved = safe.entries.map(e => {
-    const match = fuse.search(e.customer)[0]?.item;
-    const customer = match || customers.find(c => c.name.toLowerCase() === e.customer.toLowerCase()) || null;
+  let lastDay = null;
+  const dayFromYmd = (ymd) => {
+    if (!ymd || typeof ymd !== 'string') return null;
+    const d = new Date(`${ymd}T00:00:00Z`);
+    if (Number.isNaN(d.getTime())) return null;
+    const idx = d.getUTCDay(); // 0=Sun..6=Sat
+    return ["sun","mon","tue","wed","thu","fri","sat"][idx] || null;
+  };
 
-    let workDate = e.work_date;
-    if (!workDate) {
-      if (e.day) {
-        workDate = map[e.day] || map["mon"];
-      } else {
-        // If no day specified, assume today (in America/New_York) but keep it inside the current week.
+  const resolveDayKey = (entry) => {
+    if (entry.day) return entry.day;
+    const inferred = dayFromYmd(entry.work_date);
+    if (inferred) return inferred;
+    if (lastDay) return lastDay;
+    return null;
+  };
+
+  const resolved = safe.entries.map(e => {
+    const customerLower = String(e.customer || '').toLowerCase();
+    if (customerLower.includes('lunch') || customerLower.includes('launch')) {
+      const lunchCustomer = customers.find(c => c.name.toLowerCase() === 'lunch');
+      const dayKey = resolveDayKey(e);
+      let workDate = dayKey ? (map[dayKey] || map["mon"]) : null;
+      if (!workDate) {
         const t = todayYMD();
         const inWeek = Object.values(map).includes(t);
         workDate = inWeek ? t : (map["mon"] || t);
       }
+      if (dayKey) lastDay = dayKey;
+      return {
+        ...e,
+        customer_id: lunchCustomer?.id || null,
+        customer_name: 'Lunch',
+        customer: 'Lunch',
+        work_date: workDate
+      };
     }
+    const match = fuse.search(e.customer)[0]?.item;
+    const customer = match || customers.find(c => c.name.toLowerCase() === e.customer.toLowerCase()) || null;
+
+    const dayKey = resolveDayKey(e);
+    let workDate = dayKey ? (map[dayKey] || map["mon"]) : null;
+    if (!workDate) {
+      // If no day specified, assume today (in America/New_York) but keep it inside the current week.
+      const t = todayYMD();
+      const inWeek = Object.values(map).includes(t);
+      workDate = inWeek ? t : (map["mon"] || t);
+    }
+    if (dayKey) lastDay = dayKey;
     return {
       ...e,
       customer_id: customer?.id || null,
@@ -147,4 +190,72 @@ function inferDayFromText(text) {
   if (t.includes("sunday") || t.includes("sun")) return "sun";
   // default "today" handled elsewhere; here default mon
   return "mon";
+}
+
+function normalizeCompactTimes(input) {
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const fmtTime = (h, m) => `${pad2(h)}:${pad2(m)}`;
+  const parseStartFrom3 = (s) => {
+    if (s.length !== 3) return null;
+    const h = Number(s[0]);
+    const m = Number(s.slice(1));
+    if (!(h >= 1 && h <= 12)) return null;
+    if (!(m === 0 || m === 30)) return null;
+    return { h, m };
+  };
+  const parseEndFrom4 = (s) => {
+    if (s.length !== 4) return null;
+    const hh = Number(s.slice(0, 2));
+    const mm = Number(s.slice(2));
+    if (hh >= 1 && hh <= 12 && (mm === 0 || mm === 30)) return { h: hh, m: mm };
+    const h = Number(s[0]);
+    if (h >= 1 && h <= 12 && (mm === 0 || mm === 30)) return { h, m: mm };
+    return null;
+  };
+  const parseEndHourFromTwo = (s) => {
+    if (s.length !== 2) return null;
+    const n = Number(s);
+    if (n >= 1 && n <= 12) return n;
+    if (n >= 20 && n <= 29) return n % 10;
+    return null;
+  };
+  const expand7 = (t) => {
+    const start = parseStartFrom3(t.slice(0, 3));
+    const end = parseEndFrom4(t.slice(3));
+    if (!start || !end) return t;
+    return `${fmtTime(start.h, start.m)} to ${fmtTime(end.h, end.m)}`;
+  };
+  const expand5 = (t) => {
+    const start = parseStartFrom3(t.slice(0, 3));
+    const endHour = parseEndHourFromTwo(t.slice(3));
+    if (!start || endHour == null) return t;
+    return `${fmtTime(start.h, start.m)} to ${fmtTime(endHour, 0)}`;
+  };
+  const expand4 = (t) => {
+    const firstTwo = Number(t.slice(0, 2));
+    let startHour = null;
+    if (firstTwo >= 1 && firstTwo <= 12) startHour = firstTwo;
+    else startHour = Number(t[0]);
+    const endHour = parseEndHourFromTwo(t.slice(2));
+    if (!(startHour >= 1 && startHour <= 12) || endHour == null) return t;
+    return `${fmtTime(startHour, 0)} to ${fmtTime(endHour, 0)}`;
+  };
+  const expand3 = (t) => {
+    if (t.length !== 3) return t;
+    if (t[1] !== "2") return t;
+    const startHour = Number(t[0]);
+    const endHour = Number(t[2]);
+    if (!(startHour >= 1 && startHour <= 12) || !(endHour >= 0 && endHour <= 9)) return t;
+    return `${fmtTime(startHour, 0)} to ${fmtTime(endHour, 0)}`;
+  };
+
+  return String(input)
+    .replace(/\b\d{7}\b/g, (t) => expand7(t))
+    .replace(/\b\d{5}\b/g, (t) => expand5(t))
+    .replace(/\b\d{4}\b/g, (t) => {
+      const n = Number(t);
+      if (n >= 2000 && n <= 2099) return t;
+      return expand4(t);
+    })
+    .replace(/\b\d{3}\b/g, (t) => expand3(t));
 }

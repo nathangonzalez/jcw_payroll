@@ -2,3 +2,25 @@ node_modules/
 data/
 .env
 .DS_Store
+
+# Temp files
+tmp_*.mjs
+tmp_*.ps1
+tmp_*.xlsx
+tmp_*.json
+tmp_*.txt
+tmp_*.db
+
+# Generated exports
+exports/
+*.xlsx
+
+# Test artifacts
+test-results/
+playwright-report/
+
+# Recovery/prod dumps
+prod_dump.json
+prod_employees.json
+prod_stats.json
+recovery_app.db

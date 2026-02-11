@@ -24,7 +24,6 @@ function migrate(db) {
 CREATE TABLE IF NOT EXISTS employees (
   id TEXT PRIMARY KEY,
   name TEXT UNIQUE NOT NULL,
-  pin_hash TEXT NOT NULL,
   default_bill_rate REAL NOT NULL DEFAULT 0,
   default_pay_rate REAL NOT NULL DEFAULT 0,
   is_admin INTEGER NOT NULL DEFAULT 0,
@@ -59,9 +58,7 @@ CREATE TABLE IF NOT EXISTS customers (
     if (hasPinHash) {
       console.log('[migrate] Removing legacy pin_hash column from employees');
       db.exec('BEGIN');
-      // Rename old table
       db.exec('ALTER TABLE employees RENAME TO employees_old');
-      // Create new employees table without pin_hash
       db.exec(`
 CREATE TABLE IF NOT EXISTS employees (
   id TEXT PRIMARY KEY,
@@ -73,16 +70,14 @@ CREATE TABLE IF NOT EXISTS employees (
   created_at TEXT NOT NULL
 );
       `);
-      // Copy data across (preserve ids)
       db.exec(`INSERT INTO employees (id, name, default_bill_rate, default_pay_rate, is_admin, aliases_json, created_at)
         SELECT id, name, default_bill_rate, default_pay_rate, is_admin, aliases_json, created_at FROM employees_old`);
-      // Drop old table
       db.exec('DROP TABLE IF EXISTS employees_old');
       db.exec('COMMIT');
       console.log('[migrate] pin_hash column removed');
     }
   } catch (err) {
-    try { db.exec('ROLLBACK'); } catch(e){}
+    try { db.exec('ROLLBACK'); } catch (e) {}
     console.warn('[migrate] failed to remove pin_hash column', err?.message || err);
   }
 
@@ -122,12 +117,25 @@ CREATE TABLE IF NOT EXISTS time_entries (
   customer_id TEXT NOT NULL,
   work_date TEXT NOT NULL, -- YYYY-MM-DD (America/New_York)
   hours REAL NOT NULL,
+  start_time TEXT NOT NULL DEFAULT '',
+  end_time TEXT NOT NULL DEFAULT '',
   notes TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'DRAFT', -- DRAFT | SUBMITTED | APPROVED
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY(employee_id) REFERENCES employees(id),
   FOREIGN KEY(customer_id) REFERENCES customers(id)
+);
+
+CREATE TABLE IF NOT EXISTS weekly_comments (
+  id TEXT PRIMARY KEY,
+  employee_id TEXT NOT NULL,
+  week_start TEXT NOT NULL,
+  comment TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(employee_id, week_start),
+  FOREIGN KEY(employee_id) REFERENCES employees(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_time_entries_emp_date ON time_entries(employee_id, work_date);
