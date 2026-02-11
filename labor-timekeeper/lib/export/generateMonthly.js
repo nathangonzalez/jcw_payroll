@@ -197,17 +197,8 @@ export async function generateMonthlyExport({ db, month, billingRates }) {
   addLogoToSheet(monthlySheet, logoId, 9.2);
   setupWeeklyColumns(monthlySheet);
 
-  // Create a sheet for each week using the weekly sheet builder
-  // Use reverse chronological order so latest week appears first
   const weeksDesc = [...sortedWeeks].reverse();
-  // Use first week with data for employee sheets (not current week)
-  const firstWeekStart = sortedWeeks[0] || weekStartYMD(ymdToDate(monthStart));
-  const weekStartForEmployeeSheets = firstWeekStart;
-  const firstWeekEnd = (() => {
-    const d = ymdToDate(firstWeekStart);
-    d.setDate(d.getDate() + 6);
-    return formatYmd(d);
-  })();
+
   // Group entries by employee
   const byEmployee = new Map();
   for (const r of adjustedEntries) {
@@ -215,26 +206,7 @@ export async function generateMonthlyExport({ db, month, billingRates }) {
     byEmployee.get(r.emp_id).entries.push(r);
   }
 
-  // Pre-compute per-week employee sheet names for cross-sheet references
-  // Maps: weekStart -> empId -> sheetName
-  const perWeekEmpSheetMap = new Map();
-  const allUsedSheetNames = new Set();
-  const getEmpWeekSheetName = (empName, wkStart) => {
-    const wkDate = ymdToDate(wkStart);
-    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    const wkLabel = `${months[wkDate.getMonth()]}-${String(wkDate.getDate()).padStart(2,'0')}`;
-    let sName = `${(empName || '').slice(0, 20)} ${wkLabel}`.trim().slice(0, 31);
-    let suffix = 1;
-    while (allUsedSheetNames.has(sName)) {
-      sName = `${(empName || '').slice(0, 17)} ${wkLabel}_${suffix}`.slice(0, 31);
-      suffix++;
-    }
-    allUsedSheetNames.add(sName);
-    return sName;
-  };
-
-  // Build the per-week maps by checking which employees have entries in each week
-  const getEmpWeekEntriesStmt = db.prepare(`
+  const getEmpWeekEntries = db.prepare(`
     SELECT te.*, e.name as employee_name, e.id as emp_id, c.name as customer_name, c.id as cust_id
     FROM time_entries te
     JOIN employees e ON e.id = te.employee_id
@@ -245,41 +217,83 @@ export async function generateMonthlyExport({ db, month, billingRates }) {
       AND te.status = 'APPROVED'
     ORDER BY te.work_date ASC, te.created_at ASC
   `);
-  for (const wkStart of sortedWeeks) {
-    const wkEndDate = ymdToDate(wkStart);
-    wkEndDate.setDate(wkEndDate.getDate() + 6);
-    const wkEnd = formatYmd(wkEndDate);
-    const weekMap = new Map();
-    for (const [empId, empBucket] of byEmployee) {
-      const weekEntries = getEmpWeekEntriesStmt.all(empId, wkStart, wkEnd);
+
+  // ── STEP 1: Build consolidated employee sheets FIRST ──
+  // This populates empPositions with correct sheet names + row ranges
+  // so weekly breakdown sheets can reference them accurately.
+  // empPositions: empId -> Map<weekStart, {sheetName, summaryStart, summaryEnd, summaryTotal}>
+  const empPositions = new Map();
+  const weeksForTabs = [...sortedWeeks].reverse();
+
+  for (const [empId, empBucket] of byEmployee) {
+    let empSheetName = (empBucket.name || '').slice(0, 31);
+    const existingNames = new Set(workbook.worksheets.map(s => s.name));
+    let sfx = 1;
+    while (existingNames.has(empSheetName)) {
+      empSheetName = `${(empBucket.name || '').slice(0, 28)}_${sfx}`.slice(0, 31);
+      sfx++;
+    }
+    const ws = workbook.addWorksheet(empSheetName);
+    const weekPositions = new Map();
+    let isFirst = true;
+    for (const wkStart of weeksForTabs) {
+      const wkEndDate = ymdToDate(wkStart);
+      wkEndDate.setDate(wkEndDate.getDate() + 6);
+      const wkEnd = formatYmd(wkEndDate);
+      const weekEntries = getEmpWeekEntries.all(empId, wkStart, wkEnd);
       if (!weekEntries || weekEntries.length === 0) continue;
-      weekMap.set(empId, getEmpWeekSheetName(empBucket.name, wkStart));
-    }
-    perWeekEmpSheetMap.set(wkStart, weekMap);
-  }
-
-  // Also build a flat empSheetNameMap for the Monthly Breakdown (uses first available week sheet)
-  const empSheetNameMap = new Map();
-  for (const [empId] of byEmployee) {
-    for (const wkStart of sortedWeeks) {
-      const weekMap = perWeekEmpSheetMap.get(wkStart);
-      if (weekMap && weekMap.has(empId)) {
-        empSheetNameMap.set(empId, weekMap.get(empId));
-        break;
+      if (!isFirst) {
+        for (let g = 0; g < 4; g++) ws.addRow([]);
       }
+      const rowOffset = ws.rowCount;
+      const comment = getWeekComment(db, empId, wkStart);
+      const positions = buildTimesheetSheet(db, ws, weekEntries, logoId, {
+        comment,
+        rowOffset,
+        empName: empBucket.name,
+        weekStart: wkStart,
+        weekEnd: wkEnd,
+        isFirst
+      });
+      weekPositions.set(wkStart, { ...positions, sheetName: empSheetName });
+      isFirst = false;
+    }
+    ws.pageSetup = {
+      orientation: 'landscape',
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+      paperSize: 1,
+      margins: { left: 0.25, right: 0.25, top: 0.5, bottom: 0.5, header: 0.3, footer: 0.3 }
+    };
+    empPositions.set(empId, weekPositions);
+  }
+
+  // ── STEP 2: Build perWeekEmpSheetMap from empPositions ──
+  // Maps: weekStart -> empId -> sheetName (the consolidated sheet)
+  const perWeekEmpSheetMap = new Map();
+  // Also: weekStart -> empId -> { sheetName, summaryStart, summaryEnd, summaryTotal }
+  const perWeekEmpPositions = new Map();
+  for (const [empId, weekMap] of empPositions) {
+    for (const [wkStart, pos] of weekMap) {
+      if (!perWeekEmpSheetMap.has(wkStart)) perWeekEmpSheetMap.set(wkStart, new Map());
+      perWeekEmpSheetMap.get(wkStart).set(empId, pos.sheetName);
+      if (!perWeekEmpPositions.has(wkStart)) perWeekEmpPositions.set(wkStart, new Map());
+      perWeekEmpPositions.get(wkStart).set(empId, pos);
     }
   }
 
+  // ── STEP 3: Build weekly breakdown sheets ──
+  // Now formulas can correctly reference consolidated employee sheet names + rows
   for (const weekSunday of weeksDesc) {
     const weekEntries = byWeek.get(weekSunday);
     const sheetName = formatWeekName(weekSunday);
     const ws = workbook.addWorksheet(sheetName);
     addLogoToSheet(ws, logoId, 7.2);
     setupWeeklyColumns(ws);
-    // Pass the week-specific employee sheet name map
     const weekEmpMap = perWeekEmpSheetMap.get(weekSunday) || new Map();
-    const result = buildWeeklySheet(db, ws, weekEntries, weekEmpMap, getRate);
-    // result contains weekTotal and weekTotalRow to reference in summary
+    const weekPosMap = perWeekEmpPositions.get(weekSunday) || new Map();
+    const result = buildWeeklySheet(db, ws, weekEntries, weekEmpMap, getRate, weekPosMap);
     weeklyTotals.push({
       sheetName,
       weekTotalRow: result.weekTotalRow,
@@ -355,9 +369,13 @@ export async function generateMonthlyExport({ db, month, billingRates }) {
         const adminEmpRefs = [];
         for (const wkStart of sortedWeeks) {
           const weekMap = perWeekEmpSheetMap.get(wkStart);
+          const posMap = perWeekEmpPositions.get(wkStart);
           if (weekMap && weekMap.has(e.empId)) {
             const sName = weekMap.get(e.empId);
-            adminEmpRefs.push(`SUMIF('${sName}'!$I$2:$I$20,"${custNameEscaped}",'${sName}'!$J$2:$J$20)`);
+            const pos = posMap ? posMap.get(e.empId) : null;
+            const sStart = pos ? pos.summaryStart : 3;
+            const sEnd = pos ? pos.summaryEnd : 21;
+            adminEmpRefs.push(`SUMIF('${sName}'!$I$${sStart}:$I$${sEnd},"${custNameEscaped}",'${sName}'!$J$${sStart}:$J$${sEnd})`);
           }
         }
         if (adminEmpRefs.length > 0) {
@@ -419,43 +437,79 @@ export async function generateMonthlyExport({ db, month, billingRates }) {
   monthlySheet.getColumn(11).numFmt = '"$"#,##0.00';
   try { formatSheet(monthlySheet); } catch (e) {}
 
-  // Add one sheet per employee PER WEEK so each tab is a self-contained weekly timesheet
-  // (latest week first, then older weeks below)
-  const getEmpWeekEntries = db.prepare(`
-    SELECT te.*, e.name as employee_name, e.id as emp_id, c.name as customer_name, c.id as cust_id
-    FROM time_entries te
-    JOIN employees e ON e.id = te.employee_id
-    JOIN customers c ON c.id = te.customer_id
-    WHERE te.employee_id = ?
-      AND te.work_date >= ?
-      AND te.work_date <= ?
-      AND te.status = 'APPROVED'
-    ORDER BY te.work_date ASC, te.created_at ASC
-  `);
-  // Create tabs: latest week first for each employee
-  const weeksForTabs = [...sortedWeeks].reverse();
-  for (const [empId, empBucket] of byEmployee) {
+  // NOTE: Employee sheets already built in STEP 1 above.
+  // (The old duplicate block was removed – employee sheets are created before weekly sheets
+  //  so that cross-sheet formula references use the correct consolidated sheet names + row ranges.)
+
+  // Save file (if target exists/locked, write to a timestamped filename)
+  const prefix = isBillingReport ? 'Billing_Report' : 'Payroll_Breakdown';
+  let filename = `${prefix}_${month}.xlsx`;
+  let filepath = path.join(outputDir, filename);
+  if (fs.existsSync(filepath)) {
+    filename = `Payroll_Breakdown_${month}_${Date.now()}.xlsx`;
+    filepath = path.join(outputDir, filename);
+  }
+  await workbook.xlsx.writeFile(filepath);
+
+  const totals = weeklyTotals.reduce((acc, w) => {
+    acc.hourlyTotal += Number(w.hourlyTotal || 0);
+    acc.adminTotal += Number(w.adminTotal || 0);
+    acc.grandTotal += Number(w.weekTotal || 0);
+    return acc;
+  }, { hourlyTotal: 0, adminTotal: 0, grandTotal: 0 });
+
+  const customersCount = new Set(entries.map(r => r.customer_name)).size;
+  const employeesCount = new Set(entries.map(r => r.employee_name)).size;
+
+  return { filepath, filename, outputDir, totals: { customers: customersCount, employees: employeesCount, hourlyTotal: round2(totals.hourlyTotal), adminTotal: round2(totals.adminTotal), grandTotal: round2(totals.grandTotal) } };
+}
+
+/* ---- DEAD CODE REMOVED ----
+    let sfx = 1;
+    while (existingNames.has(empSheetName)) {
+      empSheetName = `${(empBucket.name || '').slice(0, 28)}_${sfx}`.slice(0, 31);
+      sfx++;
+    }
+    const ws = workbook.addWorksheet(empSheetName);
+    const weekPositions = new Map();
+    let isFirst = true;
     for (const wkStart of weeksForTabs) {
       const wkEndDate = ymdToDate(wkStart);
       wkEndDate.setDate(wkEndDate.getDate() + 6);
       const wkEnd = formatYmd(wkEndDate);
       const weekEntries = getEmpWeekEntries.all(empId, wkStart, wkEnd);
-      if (!weekEntries || weekEntries.length === 0) continue; // skip weeks with no entries
-      // Sheet name: "EmpName Mmm-DD" (e.g., "Jason Green Feb-04")
-      const wkDate = ymdToDate(wkStart);
-      const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-      const wkLabel = `${months[wkDate.getMonth()]}-${String(wkDate.getDate()).padStart(2,'0')}`;
-      let sheetName = `${(empBucket.name || '').slice(0, 20)} ${wkLabel}`.trim().slice(0, 31);
-      // Ensure unique sheet name
-      const existingNames = new Set(workbook.worksheets.map(s => s.name));
-      let suffix = 1;
-      while (existingNames.has(sheetName)) {
-        sheetName = `${(empBucket.name || '').slice(0, 17)} ${wkLabel}_${suffix}`.slice(0, 31);
-        suffix++;
+      if (!weekEntries || weekEntries.length === 0) continue;
+      if (!isFirst) {
+        // Add 4 blank separator rows
+        for (let g = 0; g < 4; g++) ws.addRow([]);
       }
-      const ws = workbook.addWorksheet(sheetName);
+      const rowOffset = ws.rowCount; // current row count = starting offset
       const comment = getWeekComment(db, empId, wkStart);
-      buildTimesheetSheet(db, ws, weekEntries, logoId, { comment });
+      const positions = buildTimesheetSheet(db, ws, weekEntries, logoId, {
+        comment,
+        rowOffset,
+        empName: empBucket.name,
+        weekStart: wkStart,
+        weekEnd: wkEnd,
+        isFirst
+      });
+      weekPositions.set(wkStart, { ...positions, sheetName: empSheetName });
+      isFirst = false;
+    }
+    // Print setup: fit on single page per week section, landscape
+    ws.pageSetup = {
+      orientation: 'landscape',
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0, // auto height (multiple pages OK for stacked weeks)
+      paperSize: 1,
+      margins: { left: 0.25, right: 0.25, top: 0.5, bottom: 0.5, header: 0.3, footer: 0.3 }
+    };
+    empPositions.set(empId, weekPositions);
+    // Update perWeekEmpSheetMap with actual positions for cross-sheet refs
+    for (const [wkStart, pos] of weekPositions) {
+      const weekMap = perWeekEmpSheetMap.get(wkStart);
+      if (weekMap) weekMap.set(empId, empSheetName);
     }
   }
 
@@ -490,6 +544,7 @@ export async function generateMonthlyExport({ db, month, billingRates }) {
 
   return { filepath, filename, outputDir, totals: { customers: customersCount, employees: employeesCount, hourlyTotal: round2(totals.hourlyTotal), adminTotal: round2(totals.adminTotal), grandTotal: round2(totals.grandTotal) } };
 }
+---- END DEAD CODE REMOVAL ---- */
 
 /**
  * Set up column widths and formats for weekly sheet
@@ -519,7 +574,7 @@ function setupWeeklyColumns(ws) {
 /**
  * Build a weekly sheet with entries grouped by customer
  */
-function buildWeeklySheet(db, ws, entries = [], empSheetNameMap = new Map(), rateFn = null) {
+function buildWeeklySheet(db, ws, entries = [], empSheetNameMap = new Map(), rateFn = null, empPositionsMap = new Map()) {
   if (!rateFn) rateFn = (empId, custId, empName) => getBillRate(db, empId, custId);
   let hourlyTotal = 0;
   let adminTotal = 0;
@@ -626,8 +681,12 @@ function buildWeeklySheet(db, ws, entries = [], empSheetNameMap = new Map(), rat
       currentRow++;
       const dataRow = ws.addRow(["", entry.empName, rate, hours, ""]);
       // Hours formula: reference employee timesheet column J (which already has SUMIF per client from column I)
+      // Use actual row ranges from empPositionsMap for stacked weeks
       if (empSheet) {
-        dataRow.getCell(4).value = { formula: `SUMIF('${empSheet}'!$I$2:$I$20,"${custName}",'${empSheet}'!$J$2:$J$20)` };
+        const pos = empPositionsMap.get(entry.empId);
+        const sStart = pos ? pos.summaryStart : 3;
+        const sEnd = pos ? pos.summaryEnd : 21;
+        dataRow.getCell(4).value = { formula: `SUMIF('${empSheet}'!$I$${sStart}:$I$${sEnd},"${custName}",'${empSheet}'!$J$${sStart}:$J$${sEnd})` };
       }
       dataRow.getCell(5).value = { formula: `C${dataRow.number}*D${dataRow.number}` };
       hourlyDataLastRow = dataRow.number;
@@ -687,7 +746,9 @@ function buildWeeklySheet(db, ws, entries = [], empSheetNameMap = new Map(), rat
       const otRow = ws.addRow(["OT", empData.name, otPremiumRate, 0, ""]);
       // Formula-driven OT hours: MAX(0, employee_total_hours - 40)
       if (empSheet) {
-        otRow.getCell(4).value = { formula: `MAX(0,'${empSheet}'!J21-${OT_THRESHOLD})` };
+        const pos = empPositionsMap.get(empId);
+        const sTotalRow = pos ? pos.summaryTotal : 22;
+        otRow.getCell(4).value = { formula: `MAX(0,'${empSheet}'!J${sTotalRow}-${OT_THRESHOLD})` };
       } else {
         const otHours = round2(Math.max(0, empData.totalHours - OT_THRESHOLD));
         otRow.getCell(4).value = otHours;
@@ -777,7 +838,11 @@ function buildWeeklySheet(db, ws, entries = [], empSheetNameMap = new Map(), rat
     const adminL21Refs = [];
     for (const empId of adminEmpIds) {
       const sName = empSheetNameMap.get(empId);
-      if (sName) adminL21Refs.push(`'${sName}'!L21`);
+      if (sName) {
+        const pos = empPositionsMap.get(empId);
+        const sTotalRow = pos ? pos.summaryTotal : 22;
+        adminL21Refs.push(`'${sName}'!L${sTotalRow}`);
+      }
     }
     if (adminL21Refs.length > 0) {
       adminSubtotalRow.getCell(11).value = { formula: adminL21Refs.join('+') };
@@ -1057,20 +1122,43 @@ function formatSheet(ws) {
 
 function buildTimesheetSheet(db, ws, entries, logoId, options = {}) {
   const weekComment = options.comment || "";
-  ws.columns = [
-    { width: 10 }, // Date
-    { width: 22 }, // Client Name
-    { width: 12 }, // Time Start
-    { width: 10 }, // Lunch
-    { width: 12 }, // Time Out
-    { width: 14 }, // Hours Per Job
-    { width: 24 }, // Notes
-    { width: 3 },  // spacer
-    { width: 22 }, // Client
-    { width: 10 }, // Hours
-    { width: 10 }, // Rate
-    { width: 12 }, // Total
-  ];
+  const rowOffset = options.rowOffset || 0;
+  const empName = options.empName || "";
+  const wkStartYmd = options.weekStart || "";
+  const wkEndYmd = options.weekEnd || "";
+  const isFirst = options.isFirst !== false;
+
+  // Only set columns on first section
+  if (isFirst || rowOffset === 0) {
+    ws.columns = [
+      { width: 10 }, // Date
+      { width: 22 }, // Client Name
+      { width: 12 }, // Time Start
+      { width: 10 }, // Lunch
+      { width: 12 }, // Time Out
+      { width: 14 }, // Hours Per Job
+      { width: 24 }, // Notes
+      { width: 3 },  // spacer
+      { width: 22 }, // Client
+      { width: 10 }, // Hours
+      { width: 10 }, // Rate
+      { width: 12 }, // Total
+    ];
+  }
+
+  // Employee name + week date range title row
+  const formatMdy = (d) => { const dt = typeof d === 'string' ? ymdToDate(d) : d; return `${dt.getMonth()+1}/${dt.getDate()}/${String(dt.getFullYear()).slice(-2)}`; };
+  const weekLabel = (wkStartYmd && wkEndYmd) ? `${formatMdy(wkStartYmd)} - ${formatMdy(wkEndYmd)}` : "";
+  const titleText = empName ? `${empName}  —  ${weekLabel}` : weekLabel;
+  const titleRow = ws.addRow([titleText]);
+  titleRow.font = { bold: true, size: 14 };
+  const titleRowNum = titleRow.number;
+  try { ws.mergeCells(titleRowNum, 1, titleRowNum, 7); } catch(e) {}
+  if (empName) {
+    titleRow.getCell(9).value = empName;
+    titleRow.getCell(9).font = { bold: true, size: 12 };
+  }
+
   const headerRow = ws.addRow(["Date", "Client Name", "Time Start", "Lunch", "Time Out", "Hours Per Job", "Notes", "", "Client", "Hours", "Rate", "Total"]);
   headerRow.font = { bold: true };
   headerRow.eachCell((cell, colNum) => {
@@ -1078,7 +1166,9 @@ function buildTimesheetSheet(db, ws, entries, logoId, options = {}) {
       cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD9E1F2' } };
     }
   });
-  addLogoToSheet(ws, logoId, 7.2);
+  const headerRowNum = headerRow.number;
+  const dataStartRow = headerRowNum + 1; // first data row
+  if (isFirst) addLogoToSheet(ws, logoId, 7.2);
 
   const entriesByDate = new Map();
   const dateOrder = [];
@@ -1179,11 +1269,11 @@ function buildTimesheetSheet(db, ws, entries, logoId, options = {}) {
     }
   }
 
-  const desiredTotalRow = 39;
+  const desiredTotalRow = titleRowNum + 38; // title + header + 36 data/pad rows + total
   while (ws.rowCount < desiredTotalRow - 1) {
     ws.addRow(["", "", "", "", "", "", "", "", "", "", "", ""]);
   }
-  const totalRowObj = ws.addRow(["", "", "", "", "Total:", { formula: `SUM(F2:F${desiredTotalRow - 1})` }, "", "", "", "", "", ""]);
+  const totalRowObj = ws.addRow(["", "", "", "", "Total:", { formula: `SUM(F${dataStartRow}:F${desiredTotalRow - 1})` }, "", "", "", "", "", ""]);
   if (weekComment) {
     totalRowObj.getCell(7).value = "Comment:";
     totalRowObj.getCell(8).value = weekComment;
@@ -1209,13 +1299,13 @@ function buildTimesheetSheet(db, ws, entries, logoId, options = {}) {
   remaining.sort((a, b) => a.name.localeCompare(b.name));
   summaryRows.push(...remaining);
 
-  let rIdx = 2;
-  const summaryTotalRow = 21;
+  let rIdx = dataStartRow; // summary panel starts at first data row
+  const summaryTotalRow = dataStartRow + 19; // 20 summary rows
   for (const s of summaryRows) {
     if (rIdx >= summaryTotalRow) break;
     const row = ws.getRow(rIdx);
     row.getCell(9).value = s.name || "";
-    row.getCell(10).value = { formula: `IF(I${rIdx}="","",SUMIF($B$2:$B$${desiredTotalRow - 1},TRIM(I${rIdx}),$F$2:$F$${desiredTotalRow - 1}))` };
+    row.getCell(10).value = { formula: `IF(I${rIdx}="","",SUMIF($B$${dataStartRow}:$B$${desiredTotalRow - 1},TRIM(I${rIdx}),$F$${dataStartRow}:$F$${desiredTotalRow - 1}))` };
     row.getCell(11).value = s.name ? s.rate : "";
     row.getCell(12).value = { formula: `IF(OR(J${rIdx}="",K${rIdx}=""),"",J${rIdx}*K${rIdx})` };
     rIdx++;
@@ -1223,22 +1313,35 @@ function buildTimesheetSheet(db, ws, entries, logoId, options = {}) {
   while (rIdx < summaryTotalRow) {
     const row = ws.getRow(rIdx);
     row.getCell(9).value = "";
-    row.getCell(10).value = { formula: `IF(I${rIdx}="","",SUMIF($B$2:$B$${desiredTotalRow - 1},TRIM(I${rIdx}),$F$2:$F$${desiredTotalRow - 1}))` };
+    row.getCell(10).value = { formula: `IF(I${rIdx}="","",SUMIF($B$${dataStartRow}:$B$${desiredTotalRow - 1},TRIM(I${rIdx}),$F$${dataStartRow}:$F$${desiredTotalRow - 1}))` };
     row.getCell(11).value = "";
     row.getCell(12).value = { formula: `IF(OR(J${rIdx}="",K${rIdx}=""),"",J${rIdx}*K${rIdx})` };
     rIdx++;
   }
   const totalSummaryRow = ws.getRow(summaryTotalRow);
   totalSummaryRow.getCell(9).value = "TOTAL:";
-  totalSummaryRow.getCell(10).value = { formula: `SUM(J2:J${summaryTotalRow - 1})` };
+  totalSummaryRow.getCell(10).value = { formula: `SUM(J${dataStartRow}:J${summaryTotalRow - 1})` };
   totalSummaryRow.getCell(11).value = singleRate;
   totalSummaryRow.getCell(12).value = { formula: `IF(OR(J${summaryTotalRow}="",K${summaryTotalRow}=""),"",J${summaryTotalRow}*K${summaryTotalRow})` };
 
-  ws.getColumn(3).numFmt = 'h:mm AM/PM';
-  ws.getColumn(4).numFmt = 'h:mm';
-  ws.getColumn(5).numFmt = 'h:mm AM/PM';
-  ws.getColumn(6).numFmt = '0.00';
-  ws.getColumn(11).numFmt = '"$"#,##0.00';
-  ws.getColumn(12).numFmt = '"$"#,##0.00';
-  try { formatSheet(ws); } catch (e) {}
+  if (isFirst) {
+    ws.getColumn(3).numFmt = 'h:mm AM/PM';
+    ws.getColumn(4).numFmt = 'h:mm';
+    ws.getColumn(5).numFmt = 'h:mm AM/PM';
+    ws.getColumn(6).numFmt = '0.00';
+    ws.getColumn(11).numFmt = '"$"#,##0.00';
+    ws.getColumn(12).numFmt = '"$"#,##0.00';
+  }
+  // Don't call formatSheet for stacked sections (it resets frozen panes)
+  if (isFirst) { try { formatSheet(ws); } catch (e) {} }
+
+  // Return positions for cross-sheet references
+  return {
+    summaryStart: dataStartRow,
+    summaryEnd: summaryTotalRow - 1,
+    summaryTotal: summaryTotalRow,
+    totalRow: desiredTotalRow,
+    titleRow: titleRowNum,
+    headerRow: headerRowNum
+  };
 }

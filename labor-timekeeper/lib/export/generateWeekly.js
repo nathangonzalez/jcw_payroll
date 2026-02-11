@@ -107,6 +107,14 @@ export async function generateWeeklyExports({ db, weekStart }) {
       { width: 10 }, // Rate
       { width: 12 }, // Total
     ];
+    // Employee name + date range title row
+    const weekRangeLabel = `${formatMdy(ymdToDate(weekStartYmd))} - ${formatMdy(ymdToDate(weekEnd))}`;
+    const titleRow = ws.addRow([`${emp.name}  —  ${weekRangeLabel}`]);
+    titleRow.font = { bold: true, size: 14 };
+    ws.mergeCells(1, 1, 1, 7);
+    titleRow.getCell(9).value = emp.name;
+    titleRow.getCell(9).font = { bold: true, size: 12 };
+
     const headerRow = ws.addRow(["Date", "Client Name", "Time Start", "Lunch", "Time Out", "Hours Per Job", "Notes", "", "Client", "Hours", "Rate", "Total"]);
     headerRow.font = { bold: true };
     headerRow.eachCell((cell, colNum) => {
@@ -245,13 +253,13 @@ export async function generateWeeklyExports({ db, weekStart }) {
       empTotalAmount += total;
     }
 
-    const desiredTotalRow = 39; // matches template where Total is on row 39
+    const desiredTotalRow = 40; // +1 for name title row
     while (ws.rowCount < desiredTotalRow - 1) {
       ws.addRow(["", "", "", "", "", "", "", "", "", "", "", ""]);
     }
 
     const totalRowIndex = desiredTotalRow;
-    const totalRow = ["", "", "", "", "Total:", { formula: `SUM(F2:F${totalRowIndex - 1})` }, "", "", "", "", "", ""];
+    const totalRow = ["", "", "", "", "Total:", { formula: `SUM(F3:F${totalRowIndex - 1})` }, "", "", "", "", "", ""];
     const totalRowObj = ws.addRow(totalRow);
     if (weekComment) {
       totalRowObj.getCell(7).value = "Comment:";
@@ -279,13 +287,13 @@ export async function generateWeeklyExports({ db, weekStart }) {
     remaining.sort((a, b) => a.name.localeCompare(b.name));
     summaryRows.push(...remaining);
 
-    let rIdx = 2;
-    const summaryTotalRow = 21; // template TOTAL row
+    let rIdx = 3;
+    const summaryTotalRow = 22; // template TOTAL row (+1 for name row)
     for (const s of summaryRows) {
       if (rIdx >= summaryTotalRow) break;
       const row = ws.getRow(rIdx);
       row.getCell(9).value = s.name || "";
-      row.getCell(10).value = { formula: `IF(I${rIdx}="","",SUMIF($B$2:$B$${totalRowIndex - 1},TRIM(I${rIdx}),$F$2:$F$${totalRowIndex - 1}))` };
+      row.getCell(10).value = { formula: `IF(I${rIdx}="","",SUMIF($B$3:$B$${totalRowIndex - 1},TRIM(I${rIdx}),$F$3:$F$${totalRowIndex - 1}))` };
       row.getCell(11).value = s.name ? s.rate : "";
       row.getCell(12).value = { formula: `IF(OR(J${rIdx}="",K${rIdx}=""),"",J${rIdx}*K${rIdx})` };
       rIdx++;
@@ -293,14 +301,14 @@ export async function generateWeeklyExports({ db, weekStart }) {
     while (rIdx < summaryTotalRow) {
       const row = ws.getRow(rIdx);
       row.getCell(9).value = "";
-      row.getCell(10).value = { formula: `IF(I${rIdx}="","",SUMIF($B$2:$B$${totalRowIndex - 1},TRIM(I${rIdx}),$F$2:$F$${totalRowIndex - 1}))` };
+      row.getCell(10).value = { formula: `IF(I${rIdx}="","",SUMIF($B$3:$B$${totalRowIndex - 1},TRIM(I${rIdx}),$F$3:$F$${totalRowIndex - 1}))` };
       row.getCell(11).value = "";
       row.getCell(12).value = { formula: `IF(OR(J${rIdx}="",K${rIdx}=""),"",J${rIdx}*K${rIdx})` };
       rIdx++;
     }
     const totalSummaryRow = ws.getRow(summaryTotalRow);
     totalSummaryRow.getCell(9).value = "TOTAL:";
-    totalSummaryRow.getCell(10).value = { formula: `SUM(J2:J${summaryTotalRow - 1})` };
+    totalSummaryRow.getCell(10).value = { formula: `SUM(J3:J${summaryTotalRow - 1})` };
     totalSummaryRow.getCell(11).value = singleRate;
     totalSummaryRow.getCell(12).value = { formula: `IF(OR(J${summaryTotalRow}="",K${summaryTotalRow}=""),"",J${summaryTotalRow}*K${summaryTotalRow})` };
 
@@ -311,6 +319,17 @@ export async function generateWeeklyExports({ db, weekStart }) {
     ws.getColumn(11).numFmt = '"$"#,##0.00';
     ws.getColumn(12).numFmt = '"$"#,##0.00';
     try { formatSheet(ws); } catch (e) {}
+    // Override frozen pane to freeze below name + header rows
+    ws.views = [{ state: 'frozen', ySplit: 2 }];
+    // Print setup: fit on single page, landscape
+    ws.pageSetup = {
+      orientation: 'landscape',
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 1,
+      paperSize: 1,
+      margins: { left: 0.25, right: 0.25, top: 0.5, bottom: 0.5, header: 0.3, footer: 0.3 }
+    };
 
     // Save file
     const safeName = emp.name.replace(/[^a-zA-Z0-9]/g, "_");
