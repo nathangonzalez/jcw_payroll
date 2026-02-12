@@ -513,6 +513,20 @@ app.get('/api/admin/list-recent-entries', (req, res) => {
   }
 });
 
+app.get("/api/payroll-weeks", (req, res) => {
+  try {
+    const today = todayYMD();
+    const currentMonth = today.slice(0, 7); // YYYY-MM
+    const month = String(req.query.month || currentMonth);
+    const weeks = payrollWeeksForMonth(month);
+    const currentWeek = weekStartYMD(new Date());
+    res.json({ month, weeks, currentWeek });
+  } catch (err) {
+    console.error("payroll-weeks error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/api/employees", (req, res) => {
   try {
     const rows = getEmployeesDBOrDefault(db);
