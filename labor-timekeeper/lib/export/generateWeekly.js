@@ -94,18 +94,18 @@ export async function generateWeeklyExports({ db, weekStart }) {
     const weekComment = getWeekComment(db, empId, weekStartYmd);
     // Jason Green.xls-style header
     ws.columns = [
-      { width: 10 }, // Date
-      { width: 22 }, // Client Name
-      { width: 12 }, // Time Start
-      { width: 10 }, // Lunch
-      { width: 12 }, // Time Out
-      { width: 14 }, // Hours Per Job
-      { width: 24 }, // Notes
-      { width: 3 },  // spacer
-      { width: 22 }, // Client
-      { width: 10 }, // Hours
-      { width: 10 }, // Rate
-      { width: 12 }, // Total
+      { width: 8 },  // Date
+      { width: 18 }, // Client Name
+      { width: 11 }, // Time Start
+      { width: 6 },  // Lunch
+      { width: 11 }, // Time Out
+      { width: 8 },  // Hours Per Job
+      { width: 16 }, // Notes (wrapped)
+      { width: 2 },  // spacer
+      { width: 18 }, // Client
+      { width: 7 },  // Hours
+      { width: 8 },  // Rate
+      { width: 10 }, // Total
     ];
     // Employee name + date range title row
     const weekRangeLabel = `${formatMdy(ymdToDate(weekStartYmd))} - ${formatMdy(ymdToDate(weekEnd))}`;
@@ -565,8 +565,24 @@ function formatSheet(ws) {
       if (typeof cell.value === 'number') cell.alignment = { horizontal: 'right' };
     });
   });
+  // Auto-fit columns based on content, but respect existing widths as minimums
+  // Notes column (7) gets special treatment: smaller + wrapped
+  const NOTES_COL = 7;
+  const SPACER_COL = 8;
   ws.columns.forEach((col, idx) => {
-    const max = colMax[idx+1] || 10;
-    col.width = Math.min(50, Math.max(12, Math.ceil(max + 2)));
+    const colNum = idx + 1;
+    if (colNum === SPACER_COL) return; // skip spacer
+    const contentMax = colMax[colNum] || 0;
+    const existingWidth = col.width || 8;
+    if (colNum === NOTES_COL) {
+      // Notes: cap at 16, enable wrapping
+      col.width = Math.min(16, Math.max(8, Math.ceil(contentMax + 1)));
+    } else {
+      // Auto-fit: use content length + 1, but don't go below 6 or above 22
+      const autoWidth = Math.ceil(contentMax + 1);
+      col.width = Math.min(22, Math.max(6, autoWidth, existingWidth));
+    }
   });
+  // Enable text wrapping on Notes column
+  ws.getColumn(NOTES_COL).alignment = { wrapText: true, vertical: 'top' };
 }
