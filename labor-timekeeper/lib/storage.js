@@ -62,6 +62,11 @@ function createConsistentCopy(dbPath) {
     const count = verify.prepare('SELECT COUNT(*) as n FROM time_entries').get();
     verify.close();
     console.log(`[storage] consistent copy created: ${count?.n || 0} entries`);
+    if ((count?.n || 0) === 0) {
+      console.warn('[storage] Refusing to backup empty database — aborting upload');
+      try { fs.unlinkSync(tmpPath); } catch (_) {}
+      return '__EMPTY__';
+    }
     return tmpPath;
   } catch (err) {
     console.warn('[storage] consistent copy failed, falling back to checkpoint', err?.message || err);
@@ -253,6 +258,12 @@ export async function backupToCloud(dbPath) {
     
     // Use consistent copy (includes WAL data) to prevent data loss
     const uploadPath = createConsistentCopy(dbPath) || dbPath;
+
+    // Safety: refuse to overwrite good backup with empty database
+    if (uploadPath === '__EMPTY__') {
+      console.warn('[storage] Skipping backup — database has 0 time entries');
+      return false;
+    }
 
     const bucket = getStorage().bucket(BUCKET_NAME);
     await bucket.upload(uploadPath, {

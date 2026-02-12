@@ -2184,7 +2184,7 @@ app.post("/api/admin/restore-latest-merge", async (req, res) => {
       db.exec('DELETE FROM customers;');
       db.exec('DELETE FROM employees;');
 
-      const insertEmp = db.prepare('INSERT INTO employees (id, name, default_bill_rate, default_pay_rate, is_admin, aliases_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+      const insertEmp = db.prepare('INSERT OR IGNORE INTO employees (id, name, default_bill_rate, default_pay_rate, is_admin, aliases_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
       for (const r of srcEmployees) insertEmp.run(r.id, r.name, r.default_bill_rate, r.default_pay_rate, r.is_admin, r.aliases_json, r.created_at);
 
       const insertCust = db.prepare('INSERT INTO customers (id, name, address, created_at) VALUES (?, ?, ?, ?)');

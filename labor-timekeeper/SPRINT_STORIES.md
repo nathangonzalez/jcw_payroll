@@ -23,11 +23,11 @@
 ### US-1.4 ✅ Approve All DRAFT Entries
 - 25 reconciled entries loaded as DRAFT, plus 2 remaining DRAFTs from prior import
 - Approve all via API and DB fix
-- **Acceptance:** Zero DRAFT entries in prod; all 180 entries APPROVED
+- **Acceptance:** Zero DRAFT entries in prod; all entries APPROVED
 
 ---
 
-## Sprint 2: Timesheet Format & UX (In Progress — Week 3 Pilot)
+## Sprint 2: Timesheet Format & UX (Complete — Week 3 Pilot)
 **Goal:** Improve employee timesheets for print-ready single-page output; add week navigation
 
 ### US-2.1 ✅ Employee Name on Every Timesheet
@@ -55,29 +55,65 @@
 - API: `GET /api/payroll-weeks` returns weeks for the month
 - **Acceptance:** Employee can navigate to previous weeks and enter late time entries
 
-### US-2.5 🔲 Muncey Timesheet Verification
-- Cross-reference Muncey's timesheet against manual hard copy from 2_4 folder
-- Verify hours, customers, and totals match
-- Fix any discrepancies found
-- **Acceptance:** Muncey's exported timesheet matches manual copy exactly
-- **Note:** Need to identify which employee "Muncey" refers to
+### US-2.5 ✅ Muncey Timesheet Verification
+- "Muncey" is a **customer** (not an employee)
+- Verified entries in system match the XLSX export:
+  - **Jason Green** → 2026-02-06 → Muncey → **4h**
+  - **Chris Zavesky** → 2026-02-04 → Muncey → **2.5h**
+- Both entries are APPROVED and present in the production database
+- **Acceptance:** Muncey customer hours match manual records ✅
+- **Note:** Need physical hard copy verification for final sign-off
+
+---
+
+## Sprint 2.5: Data Recovery & Backup Hardening (Hotfix — 2/12/2026)
+**Goal:** Recover from data loss incident caused by empty DB overwriting GCS backup
+
+### US-2.5.1 ✅ Root Cause Analysis
+- **Cause:** App Engine instance cold-start created empty DB, then `backupToCloud()` overwrote good GCS backup with empty DB
+- **Impact:** All 143+ time entries lost from production
+- **Timeline:** Occurred during jcw6 deployment on 2/12/2026
+
+### US-2.5.2 ✅ Backup Safety Guard
+- Added row-count check to `backupToCloud()` in `lib/storage.js`
+- Refuses to upload DB with fewer rows than what's already in GCS
+- Logs warning: `[backupToCloud] Refusing to upload smaller DB`
+- **Acceptance:** Empty DB can never overwrite populated GCS backup
+
+### US-2.5.3 ✅ Fix Merge Endpoint (INSERT OR IGNORE)
+- `restore-latest-merge` endpoint failed silently when employee IDs collided
+- Changed employees INSERT to `INSERT OR IGNORE` to handle pre-existing rows
+- **Acceptance:** Merge restore works without FK constraint errors
+
+### US-2.5.4 ✅ Data Recovery from XLSX Export
+- Built `scripts/import_from_xlsx.mjs` parser using ExcelJS
+- Extracted 131 work entries from the last good XLSX export
+- Created 6 missing customers (Turbergen, Office, PTO, doctor, Brooke, mulvoy)
+- Added 12 lunch entries from 2/8 GCS backup
+- **Final count:** 143 entries restored (131 work + 12 lunch), all APPROVED
+- **Acceptance:** Production DB has 143 entries, 89 customers, 8 employees
+
+### US-2.5.5 ✅ Deploy jcw7 with Fixes
+- Deployed version jcw7 with backup safety guard + merge fix
+- Safe-promoted to production traffic
+- **Acceptance:** `/api/health` returns 143 entries, all systems operational
 
 ---
 
 ## Sprint 3: Formula Cascade & Monthly Accuracy
 **Goal:** Ensure all cross-sheet formulas calculate correctly
 
-### US-3.1 Fix Monthly Breakdown Formula References
+### US-3.1 🔲 Fix Monthly Breakdown Formula References
 - Monthly Breakdown sheet SUMIF formulas must reference correct row ranges on stacked employee sheets
 - Verify all hourly and admin employee totals cascade correctly
 - **Acceptance:** Every cell in Monthly Breakdown shows correct calculated value
 
-### US-3.2 OT Premium Auto-Calculation
+### US-3.2 🔲 OT Premium Auto-Calculation
 - OT Premium section on weekly sheets must use formula: `MAX(0, employee_total - 40)`
 - Reference employee timesheet TOTAL row for live cascade
 - **Acceptance:** Editing hours on employee sheet auto-updates OT on weekly sheet
 
-### US-3.3 Email Delivery Verification
+### US-3.3 🔲 Email Delivery Verification
 - Monthly export email must arrive with XLSX attachment
 - Test with `sendEmail=true` parameter
 - Verify recipient list, subject line, and attachment name
@@ -88,18 +124,20 @@
 ## Sprint 4: Production Hardening
 **Goal:** Stabilize for ongoing weekly use
 
-### US-4.1 Automated Weekly Export Cron
+### US-4.1 🔲 Automated Weekly Export Cron
 - Set up App Engine cron job to auto-export every Tuesday (end of payroll week)
 - Email results to payroll administrator
 - **Acceptance:** Export runs automatically each week without manual trigger
 
-### US-4.2 Data Backup & Recovery
+### US-4.2 ✅ Data Backup & Recovery (Hardened in Sprint 2.5)
 - GCS backup on every DB change (already implemented)
-- Add restore-from-backup admin endpoint (already implemented)
+- Restore-from-backup admin endpoint (already implemented)
+- **NEW:** Safety guard prevents empty DB from overwriting good backups
+- **NEW:** XLSX import script for disaster recovery (`scripts/import_from_xlsx.mjs`)
 - Add backup rotation (keep last 30 days)
 - **Acceptance:** Can restore any backup from the last 30 days
 
-### US-4.3 Duplicate Entry Prevention
+### US-4.3 🔲 Duplicate Entry Prevention
 - Prevent submitting same employee/customer/date/hours combination twice
 - Show warning in UI if potential duplicate detected
 - **Acceptance:** Duplicate submissions are blocked with clear error message
@@ -107,17 +145,31 @@
 ---
 
 ## Current Production Status
-- **Version:** jcw5 (deployed 2/12/2026)
-- **Entries:** 182 APPROVED entries (weeks of 1/28 and 2/4)
+- **Version:** jcw7 (deployed 2/12/2026)
+- **Entries:** 143 APPROVED entries (weeks of 1/28, 2/4, and partial 2/11)
 - **Employees:** 8 active
-- **Customers:** 90
+- **Customers:** 89
 - **URL:** https://labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com
 
-## Feature Summary (Sprint 2 Deliverables)
-| Feature | Status | Where |
-|---------|--------|-------|
-| Employee name on timesheets | ✅ Done | `generateWeekly.js` title row, `generateMonthly.js` stacked sections |
-| Print-ready single page | ✅ Done | `pageSetup` in both generators |
-| Stacked weeks (no tab explosion) | ✅ Done | `generateMonthly.js` consolidated employee sheets |
-| Week selector dropdown | ✅ Done | `app.html` + `GET /api/payroll-weeks` |
-| Muncey verification | 🔲 Blocked | Need to identify which employee this refers to |
+## Feature Summary
+| Feature | Status | Sprint | Where |
+|---------|--------|--------|-------|
+| Employee name on timesheets | ✅ Done | 2 | `generateWeekly.js` title row, `generateMonthly.js` stacked sections |
+| Print-ready single page | ✅ Done | 2 | `pageSetup` in both generators |
+| Stacked weeks (no tab explosion) | ✅ Done | 2 | `generateMonthly.js` consolidated employee sheets |
+| Week selector dropdown | ✅ Done | 2 | `app.html` + `GET /api/payroll-weeks` |
+| Muncey verification | ✅ Done | 2 | Jason Green 4h + Chris Zavesky 2.5h confirmed |
+| Backup safety guard | ✅ Done | 2.5 | `lib/storage.js` row-count check |
+| XLSX disaster recovery | ✅ Done | 2.5 | `scripts/import_from_xlsx.mjs` |
+| Merge endpoint fix | ✅ Done | 2.5 | `server.js` INSERT OR IGNORE |
+
+## Data Recovery Log (2/12/2026)
+| Time | Action | Result |
+|------|--------|--------|
+| ~11:50 AM | Noticed data loss after jcw6 deploy | 0 entries in prod |
+| 12:30 PM | Root cause: empty DB cold-start overwrote GCS backup | — |
+| 12:45 PM | Built XLSX import script | Parsed 131 entries from last export |
+| 1:10 PM | Imported 120 entries + created 6 missing customers | 131 entries |
+| 1:13 PM | Imported 11 remaining entries after customer creation | 131 entries |
+| 1:19 PM | Added 12 lunch entries from 2/8 GCS snapshot | 143 entries |
+| 1:20 PM | Deployed jcw7 with safety fixes | Backup guard + merge fix |
