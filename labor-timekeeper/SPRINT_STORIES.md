@@ -1,6 +1,6 @@
 # JCW Labor Timekeeper — Sprint Plan & User Stories
 
-## Sprint 1: Data Integrity & Export Fix (Current — Week 2 Pilot)
+## Sprint 1: Data Integrity & Export Fix (Complete — Week 2 Pilot)
 **Goal:** Reconcile Week 2/4 data against manual timesheets, fix export bugs
 
 ### US-1.1 ✅ Reconcile 2/4 Week Data Against Manual Timesheets
@@ -27,39 +27,47 @@
 
 ---
 
-## Sprint 2: Timesheet Format & UX (Next Sprint)
-**Goal:** Improve employee timesheets for print-ready single-page output
+## Sprint 2: Timesheet Format & UX (In Progress — Week 3 Pilot)
+**Goal:** Improve employee timesheets for print-ready single-page output; add week navigation
 
-### US-2.1 Employee Name on Every Timesheet
-- Each timesheet tab/section must prominently display the employee's full name
-- Already partially done (title row has `Name — Date Range`)
-- Ensure name appears in print header/footer as well
+### US-2.1 ✅ Employee Name on Every Timesheet
+- Each timesheet tab/section prominently displays the employee's full name
+- Title row: `Name — Date Range` (bold, size 14)
+- Right panel also shows employee name (bold, size 12)
 - **Acceptance:** When printed, employee name is clearly visible on every page
 
-### US-2.2 Print-Ready Single Page Formatting
-- Timesheets must fit on a single landscape page when printed
-- Set `fitToPage`, `fitToWidth: 1`, `fitToHeight: 1` in page setup
-- Adjust column widths, font sizes, and margins for optimal print layout
+### US-2.2 ✅ Print-Ready Single Page Formatting
+- Timesheets fit on a single landscape page when printed
+- `fitToPage: true`, `fitToWidth: 1`, `fitToHeight: 1` in page setup
+- Margins: 0.25" left/right, 0.5" top/bottom
 - **Acceptance:** File → Print produces clean single-page output in Excel
 
-### US-2.3 Consolidated Single-Tab Export (Stacked Weeks)
-- Instead of one tab per employee per week, stack all weeks on ONE sheet per employee
+### US-2.3 ✅ Consolidated Single-Tab Export (Stacked Weeks)
+- Instead of one tab per employee per week, all weeks stacked on ONE sheet per employee
 - Current week at the top, older weeks below with 4 blank separator rows
 - Monthly breakdown and weekly summary sheets remain as separate tabs
 - **Acceptance:** Export has ~8 employee sheets (not 16+), each with weeks stacked
 
-### US-2.4 Muncey Timesheet Verification
-- Cross-reference Muncey's timesheet against manual hard copy
+### US-2.4 ✅ Week Selector in Employee UI
+- Employees can select which payroll week to view/enter time for
+- Dropdown shows all weeks in the current payroll month (4-5 weeks)
+- Current week is pre-selected with "(current)" label
+- API: `GET /api/payroll-weeks` returns weeks for the month
+- **Acceptance:** Employee can navigate to previous weeks and enter late time entries
+
+### US-2.5 🔲 Muncey Timesheet Verification
+- Cross-reference Muncey's timesheet against manual hard copy from 2_4 folder
 - Verify hours, customers, and totals match
 - Fix any discrepancies found
 - **Acceptance:** Muncey's exported timesheet matches manual copy exactly
+- **Note:** Need to identify which employee "Muncey" refers to
 
 ---
 
 ## Sprint 3: Formula Cascade & Monthly Accuracy
 **Goal:** Ensure all cross-sheet formulas calculate correctly
 
-### US-3.1 Fix Monthly Breakdown Formula References (e92/e93)
+### US-3.1 Fix Monthly Breakdown Formula References
 - Monthly Breakdown sheet SUMIF formulas must reference correct row ranges on stacked employee sheets
 - Verify all hourly and admin employee totals cascade correctly
 - **Acceptance:** Every cell in Monthly Breakdown shows correct calculated value
@@ -99,8 +107,17 @@
 ---
 
 ## Current Production Status
-- **Version:** jcw3 (deployed 2/11/2026)
-- **Entries:** 180 APPROVED entries (weeks of 1/28 and 2/4)
+- **Version:** jcw5 (deployed 2/12/2026)
+- **Entries:** 182 APPROVED entries (weeks of 1/28 and 2/4)
 - **Employees:** 8 active
 - **Customers:** 90
 - **URL:** https://labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com
+
+## Feature Summary (Sprint 2 Deliverables)
+| Feature | Status | Where |
+|---------|--------|-------|
+| Employee name on timesheets | ✅ Done | `generateWeekly.js` title row, `generateMonthly.js` stacked sections |
+| Print-ready single page | ✅ Done | `pageSetup` in both generators |
+| Stacked weeks (no tab explosion) | ✅ Done | `generateMonthly.js` consolidated employee sheets |
+| Week selector dropdown | ✅ Done | `app.html` + `GET /api/payroll-weeks` |
+| Muncey verification | 🔲 Blocked | Need to identify which employee this refers to |
