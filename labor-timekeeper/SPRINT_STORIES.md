@@ -100,6 +100,39 @@
 
 ---
 
+## Sprint 2.6: Cold-Start Restore Hardening (Hotfix — 2/13/2026)
+**Goal:** Fix persistent cold-start data loss caused by WAL-mode backup bug
+
+### US-2.6.1 ✅ Root Cause Analysis — WAL Not Checkpointed
+- jcw6 ran SQLite in WAL mode; all writes stored in `-wal` sidecar file
+- `backupToCloud()` uploaded raw `.db` file (without WAL data) → empty backup
+- The `__EMPTY__` guard in jcw8 prevented empty backups, but GCS was already corrupted
+- Daily snapshots were also empty (uploaded from empty instances)
+- **Impact:** All restore attempts downloaded a 127KB file with schema but 0 entries/0 customers
+
+### US-2.6.2 ✅ Hardened Cold-Start Restore (Retry + Snapshot Fallback)
+- **Layer 1:** 3 retries with 2s backoff for main GCS backup download
+- **Layer 2:** If main backup has 0 entries, fall back to daily snapshots (tries 5 most recent)
+- **Verification gate:** `verifyDbEntries()` checks entry count after every download
+- **Empty guard:** Refuses to start backup schedule if DB has 0 entries
+- New exports: `restoreFromDailySnapshot()`, `verifyDbEntries()` in `lib/storage.js`
+- **Acceptance:** Server logs show retry attempts and fallback behavior
+
+### US-2.6.3 ✅ Emergency Data Migration (jcw6 → jcw10)
+- Extracted all 151 entries from running jcw6 instance via REST API
+- Created 6 missing customers (mulvoy, Turbergen, PTO, Office, doctor, Brooke)
+- Imported all 151 entries into jcw10 staging
+- `createConsistentCopy()` (VACUUM INTO) now properly captures WAL data in backup
+- **Acceptance:** jcw10 has 151 entries, 89 customers, 8 employees — matches jcw6
+
+### US-2.6.4 ✅ Deploy jcw10 & Promote
+- Deployed jcw10 with hardened restore (retry + snapshot fallback + verification)
+- Verified GCS backup updated with real data (86KB, not empty 127KB)
+- Safe-promoted jcw10 to production
+- **Acceptance:** `/api/health` returns 151 entries, cold-starts will now retry + fallback
+
+---
+
 ## Sprint 3: Formula Cascade & Monthly Accuracy
 **Goal:** Ensure all cross-sheet formulas calculate correctly
 
@@ -145,11 +178,13 @@
 ---
 
 ## Current Production Status
-- **Version:** jcw7 (deployed 2/12/2026)
-- **Entries:** 143 APPROVED entries (weeks of 1/28, 2/4, and partial 2/11)
+- **Version:** jcw10 (deployed 2/13/2026)
+- **Entries:** 151 APPROVED entries (weeks of 1/28, 2/4, 2/11)
 - **Employees:** 8 active
 - **Customers:** 89
 - **URL:** https://labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com
+- **Backup:** GCS backup verified good (86KB with 151 entries), `VACUUM INTO` ensures WAL data included
+- **Cold-start hardening:** 3x retry + daily snapshot fallback + verification gate
 
 ## Feature Summary
 | Feature | Status | Sprint | Where |
@@ -159,9 +194,12 @@
 | Stacked weeks (no tab explosion) | ✅ Done | 2 | `generateMonthly.js` consolidated employee sheets |
 | Week selector dropdown | ✅ Done | 2 | `app.html` + `GET /api/payroll-weeks` |
 | Muncey verification | ✅ Done | 2 | Jason Green 4h + Chris Zavesky 2.5h confirmed |
-| Backup safety guard | ✅ Done | 2.5 | `lib/storage.js` row-count check |
+| Backup safety guard | ✅ Done | 2.5 | `lib/storage.js` row-count check + `__EMPTY__` guard |
 | XLSX disaster recovery | ✅ Done | 2.5 | `scripts/import_from_xlsx.mjs` |
 | Merge endpoint fix | ✅ Done | 2.5 | `server.js` INSERT OR IGNORE |
+| WAL-safe backups (VACUUM INTO) | ✅ Done | 2.6 | `lib/storage.js` `createConsistentCopy()` |
+| Retry + snapshot fallback restore | ✅ Done | 2.6 | `lib/storage.js` + `server.js` startup |
+| API data migration tooling | ✅ Done | 2.6 | `tmp_clean_import.mjs` pattern |
 
 ## Data Recovery Log (2/12/2026)
 | Time | Action | Result |
