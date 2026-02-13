@@ -1,121 +1,144 @@
 # JCW Labor Timekeeper - Session Persistence
-# Last updated: February 6, 2026
+# Last updated: February 13, 2026
 
 ## PROJECT OVERVIEW
 Construction crew time tracking PWA with voice input and payroll export.
 - Employee time entry with voice notes (OpenAI Whisper)
 - Admin approval workflow (PIN: 7707)
 - Weekly and Monthly XLSX payroll exports
-- Cloud backup to Google Cloud Storage
+- Cloud backup to Google Cloud Storage every 5 min
+- Email notifications on submit/export (via smtp-relay.gmail.com)
 
 ## PRODUCTION DEPLOYMENT
-- URL: https://labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com
-- Project: jcw-2-android-estimator
-- Region: us-central1
-- Runtime: nodejs22 on App Engine
-- Database: SQLite in /tmp/app.db (ephemeral, restored from Cloud Storage on startup)
-- Bucket: gs://jcw-labor-timekeeper
+- **Production URL:** https://labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com
+- **Current version:** jcw6 (deployed 2026-02-12, TRAFFIC_SPLIT=1.00)
+- **Project:** jcw-2-android-estimator
+- **Region:** us-central1
+- **Runtime:** nodejs22 on App Engine Standard (F1)
+- **Database:** SQLite at /tmp/app.db (ephemeral, restored from GCS on cold start)
+- **Bucket:** gs://jcw-labor-timekeeper
+- **Scaling:** min_instances=1, max_instances=1
+
+## CURRENT DATA STATE (as of 2/13/2026)
+- **151 time entries** (real production data from week of 2/2 and 2/9)
+- **89 customers** (from seed + 6 added during reconciliation)
+- **8 employees:** Boban Abbate, Doug Kinsey, Jason Green, Phil Henderson, Sean Matthew, Thomas Brinson, Chris Jacobi (admin), Chris Zavesky (admin)
+- GCS backup verified: 151 entries, 89 customers, updated every ~5 min by jcw6
+
+## ACTIVE EMPLOYEES (entering time weekly)
+- Boban Abbate (hourly)
+- Doug Kinsey (hourly)
+- Jason Green (hourly)
+- Phil Henderson (hourly)
+- Sean Matthew (hourly)
+- Thomas Brinson (hourly)
+- Chris Jacobi (admin)
+- Chris Zavesky (admin)
 
 ## SECRETS (Google Secret Manager)
 - SMTP_USER: nathan@jcwelton.com
 - SMTP_PASS: (configured)
-- OPENAI_API_KEY: sk-proj-... (configured, version 4)
+- OPENAI_API_KEY: sk-proj-... (configured)
+
+## APP ENGINE VERSIONS
+- **jcw6** — Current production (TRAFFIC_SPLIT=1.00). Has data but lacks email retry + backup safety guard.
+- **jcw7** — Has backup safety guard + INSERT OR IGNORE merge fix. NOT promoted.
+- **jcw8** — jcw7 + email retry logic. NOT promoted.
+- **~140 zombie versions** — Old timestamp/patch versions at 0% traffic. Should be cleaned up.
+
+## KNOWN BUGS
+1. **GCS cold-start restore returns 0 entries** — When jcw7/jcw8 cold-start, `restoreFromCloud` logs success but `openDb()` sees 0 entries. Root cause under investigation. Possibly a race condition or stale GCS backup during the download window.
+2. **jcw6 lacks backup safety guard** — If jcw6 ever restarts and gets 0 entries, it will overwrite GCS with an empty DB (no protection). Critical to promote a version with the safety guard soon.
+3. **Email SMTP rate limiting** — Gmail SMTP (smtp-relay.gmail.com) occasionally returns 421-4.7.0 during bursts. Fixed in jcw8 with retry logic (3 attempts, fresh connection per retry, 2s delay).
+
+## KEY FEATURES
+- Employee time entry (voice or manual)
+- Submit week / **Unsubmit week** (back to DRAFT)
+- Admin approve entries
+- Weekly XLSX export per employee
+- Monthly payroll breakdown XLSX
+- Email notification on submit-week + weekly export
+- Graceful shutdown backup (SIGTERM handler)
 
 ## DEPLOY COMMANDS
 ```powershell
-$gcloud = "C:\Users\nathan\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd"
-cd c:\Users\nathan\dev\repos\jcw_payroll\labor-timekeeper
-& $gcloud app deploy --quiet
+cd c:\Users\natha\dev\repos\jcw_payroll\labor-timekeeper
 
-# Seed after deploy:
-$baseUrl = "https://labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com"
-Invoke-RestMethod -Uri "$baseUrl/api/admin/seed" -Method POST
+# Deploy new version WITHOUT promoting (safe):
+gcloud app deploy --no-promote --version=jcwN --project=jcw-2-android-estimator --quiet
+
+# Test on staging URL:
+# https://jcwN-dot-labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com/api/health
+
+# Promote via safe-promote.ps1:
+powershell -File safe-promote.ps1 <old_version>
 ```
 
-## CURRENT STATE / KNOWN ISSUES
-1. Admin PIN gate working (7707)
-2. 62 test entries imported for week 2026-01-28, SUBMITTED status
-3. Ready for admin approval at patch URL, then monthly report download for 2026-02
-4. Employee sheets now query FULL month range (not just first week) - fixed empty sheets bug
-
-## RECENT CHANGES
-### Feb 6, 2026 - Payroll Export & Encoding Fixes (patch p-ui0206)
-- lib/export/generateMonthly.js: FIXED employee sheets empty bug (was querying only first week, now full month range)
-- public/app.html: Fixed UTF-16LE encoding (em dash, pin icon, delete button ✕)
-- public/admin.html: Fixed UTF-16LE encoding (📊📋✅❌🛠️🌱⚠️ emojis, em dash)
-- scripts/import_test_entries.mjs: NEW - imports exact payroll data (62 entries for week 2026-01-28)
-- scripts/fix_encoding.mjs: Utility to fix mojibake in UTF-16LE HTML files
-- 62 entries imported as SUBMITTED for: Boban Abbate, Doug Kinsey, Sean Matthew, Thomas Brinson, Jason Green, Phil Henderson
-- Customers covered: Behrens, Boyle, Gee, Landy, Lucas, Lynn, O'Connor, PTO, Schroeder, Theobald, Walsh, Watkins
-- Total hours: 242.75
-- Patch URL: https://p-ui0206-dot-labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com
-- Promote command: gcloud app services set-traffic labor-timekeeper --splits p-ui0206=1 --project=jcw-2-android-estimator --quiet
-
-### Feb 6, 2026 - Mobile UI Optimization (earlier in session)
-- public/app.html: Voice "Speak it" section now collapsible (collapsed by default)
-- public/app.html: Added "Hide Notes" / "Show Notes" toggle button on entries table
-- public/styles.css: Added mobile-first CSS (@media ≤640px) - larger buttons, full-width stacking
-
-### Previous (not yet verified)
-- public/admin.html: Added Select All checkbox, total row in approvals table
-- lib/secrets.js: Loads secrets from Google Secret Manager
-- Voice recording: Safari/iOS compatibility (webm/mp4/aac/ogg fallbacks)
-- server.js: Added admin simulation endpoint `/api/admin/simulate-week`
-- public/app.html: Wired `Submit Week` button to backend
-
-## RELEASE 1.1 DRAFT UPGRADES
-1. Voice review & edit step for parsed entries (edit customer/hours/date/notes before apply).
-2. Limited voice correction commands for the current parsed list (e.g., "change entry 2 customer to Hall").
-3. Inline edit for saved entries (customer, hours, notes) + one-tap delete.
-4. Voice suggestions from recent/favorite customers to reduce mis-matches.
-5. Front-end polish (clearer grouping, status feedback, quick-hour chips).
+## STARTUP SEQUENCE (server.js)
+1. `await loadSecrets()` — Load SMTP_USER, SMTP_PASS, OPENAI_API_KEY from Secret Manager
+2. `restoreFromCloud(DB_PATH)` — Download gs://jcw-labor-timekeeper/app.db to /tmp/app.db
+3. `const db = openDb()` — Open SQLite, set WAL mode, run db.js migrate
+4. `scheduleBackups(DB_PATH)` — Every 5 min backup to GCS
+5. `scheduleDailySnapshots(DB_PATH)` — Daily snapshot
+6. `await snapshotDailyToCloud(DB_PATH)` — Immediate snapshot at boot
+7. `await migrate(db)` — lib/migrate.js (ensureColumn, seed customers if empty)
+8. `ensureEmployees(db)` — Insert default employees if missing
+9. `app.listen(port)` — Start Express server
 
 ## KEY FILES
-- server.js: Express API server, main entry point
-- public/app.html: Employee time entry UI
-- public/admin.html: Admin dashboard (PIN protected)
-- lib/export/generateMonthly.js: Monthly payroll XLSX (vertical format with dates)
-- lib/export/generateWeekly.js: Weekly per-employee XLSX
-- lib/storage.js: Cloud Storage backup/restore, reconciliation
-- lib/secrets.js: Google Secret Manager integration
-- app.yaml: App Engine config
+- **server.js** — Express API server, main entry point (~1000 lines)
+- **public/app.html** — Employee time entry UI (SPA)
+- **public/admin.html** — Admin dashboard (PIN protected)
+- **lib/storage.js** — GCS backup/restore, safety guard, daily snapshots
+- **lib/db.js** — SQLite schema, openDb(), migrations
+- **lib/migrate.js** — Column migrations, customer seeding
+- **lib/email.js** — SMTP email with retry logic
+- **lib/export/generateWeekly.js** — Weekly per-employee XLSX
+- **lib/export/generateMonthly.js** — Monthly payroll breakdown XLSX
+- **lib/time.js** — Payroll week/month calculations
+- **lib/bootstrap.js** — Default employee seeding
+- **lib/secrets.js** — Google Secret Manager integration
+- **app.yaml** — App Engine config
 
-## API ENDPOINTS
-- POST /api/time-entries: Submit time entry
-- GET /api/approvals?week_start=YYYY-MM-DD: Get pending entries
-- POST /api/approve: Approve selected entries {ids: [...]}
-- GET /api/export/monthly?month=YYYY-MM: Download monthly XLSX
-- GET /api/admin/generate-week?week_start=YYYY-MM-DD: Generate weekly exports
-- GET /api/admin/generate-month?month=YYYY-MM: Generate monthly export
-- POST /api/admin/seed: Seed database from JSON files
-- POST /api/admin/reconcile: Archive and clear month data
+## API ENDPOINTS (key ones)
+- POST /api/time-entries — Create/update time entry
+- DELETE /api/time-entries/:id — Delete DRAFT entry
+- POST /api/submit-week — Submit week (DRAFT → SUBMITTED + email notification)
+- POST /api/unsubmit-week — Unsubmit week (SUBMITTED → DRAFT)
+- GET /api/approvals?week_start=YYYY-MM-DD — Get pending entries
+- POST /api/approve — Approve entries {ids: [...]}
+- GET /api/admin/generate-week?week_start=YYYY-MM-DD — Generate weekly exports
+- GET /api/admin/generate-month?month=YYYY-MM — Generate monthly export
+- GET /api/export/monthly?month=YYYY-MM — Download monthly XLSX
+- POST /api/admin/import-entries — Bulk import entries
+- POST /api/admin/restore-latest-merge — Restore from GCS (merge into running DB)
+- GET /api/health — Health check with DB stats
 
 ## DATA MODEL
-- employees (id, name, default_bill_rate)
-- customers (id, name, address)
-- rate_overrides (employee_id, customer_id, rate)
-- time_entries (employee_id, customer_id, work_date, hours, notes, status)
-- Status values: PENDING, APPROVED, REJECTED
+- employees (id, name, default_bill_rate, default_pay_rate, is_admin, aliases_json, role, created_at)
+- customers (id, name, address, created_at)
+- rate_overrides (employee_id, customer_id, bill_rate)
+- time_entries (id, employee_id, customer_id, work_date, hours, start_time, end_time, notes, status, entry_type, created_at, updated_at)
+- weekly_comments (employee_id, week_start, comment)
+- Status values: DRAFT, SUBMITTED, APPROVED
 
-## TESTING
-- Playwright tests: npm test (18 tests)
-- Config: playwright.config.cjs
-- Tests file: tests/labor-timekeeper.spec.cjs
+## RECONCILIATION (2/4 week)
+- Manual XLS timesheets in /2_4/ folder for verification
+- 6 employees: Boban Abbate, Doug Kinsey, Jason Green, Phil Henderson, Sean Matthew, Thomas Brinson
+- Reconciliation done: system data matches manual timesheets
+- See RECONCILE_2_4.md for details
 
-## TODO / NEXT STEPS
-1. Test admin Load button locally
-2. Test Weekly and Monthly export buttons
-3. Test `Simulate Week` admin feature (use week 2026-01-05, try reset+submit+approve)
-4. Verify employee `Submit Week` workflow now submits and updates status
-3. Verify date column appears in exported XLSX
-4. May need to fix admin.html JavaScript if buttons not working
-5. Run UAT tests after fixes
-
-## EMPLOYEE CATEGORIES
-- Hourly: Default employees (shown in main payroll section)
-- Admin: Chris J, Chris Z (shown in separate Office section, not per-customer)
+## PENDING WORK (from user request 2/13)
+1. Compare week 2/4 actuals with system exports and adjust
+2. Add employee name to exported timesheets
+3. Format timesheets for single-page print
+4. Stack all weekly timesheets in single export (current week on top, separated by blank lines)
+5. Break into user stories and sprints
+6. Verify "Muncey" against manual copy
 
 ## NOTES
-- /tmp is ephemeral on App Engine - database auto-restores from Cloud Storage
+- /tmp is ephemeral on App Engine — database auto-restores from Cloud Storage on cold start
 - Backup runs every 5 minutes in production
-- Use reconciliation feature to archive months before clearing
+- Safety guard prevents uploading empty DB (in jcw7+ only, NOT in jcw6)
+- Graceful shutdown (SIGTERM) does final backup before instance dies
+- Unsubmit feature exists: POST /api/unsubmit-week

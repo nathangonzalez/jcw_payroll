@@ -225,7 +225,27 @@ export async function restoreFromCloud(dbPath) {
 
     // Download backup
     await file.download({ destination: dbPath });
-    console.log(`[storage] Restored database from gs://${BUCKET_NAME}/${chosenName}`);
+    
+    // Verify the downloaded file has data
+    const fileSize = fs.statSync(dbPath).size;
+    console.log(`[storage] Downloaded gs://${BUCKET_NAME}/${chosenName} -> ${dbPath} (${fileSize} bytes)`);
+    try {
+      const verifyDb = new Database(dbPath, { readonly: true });
+      const tables = verifyDb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
+      let entryCount = 0;
+      let custCount = 0;
+      if (tables.some(t => t.name === 'time_entries')) {
+        entryCount = verifyDb.prepare('SELECT COUNT(*) as n FROM time_entries').get()?.n || 0;
+      }
+      if (tables.some(t => t.name === 'customers')) {
+        custCount = verifyDb.prepare('SELECT COUNT(*) as n FROM customers').get()?.n || 0;
+      }
+      verifyDb.close();
+      console.log(`[storage] Restore verified: ${entryCount} entries, ${custCount} customers, tables: ${tables.map(t=>t.name).join(',')}`);
+    } catch (verifyErr) {
+      console.warn('[storage] Restore verify failed (file may be corrupt):', verifyErr?.message || verifyErr);
+    }
+    
     return true;
   } catch (err) {
     console.error('[storage] Failed to restore from cloud:', err.message);
@@ -349,6 +369,13 @@ export async function snapshotDailyToCloud(dbPath) {
     }
     // Use consistent copy (includes WAL data) to prevent data loss
     const uploadPath = createConsistentCopy(dbPath) || dbPath;
+    
+    // Safety: refuse to snapshot empty database
+    if (uploadPath === '__EMPTY__') {
+      console.warn('[storage] Skipping daily snapshot — database has 0 time entries');
+      return false;
+    }
+    
     const bucket = getStorage().bucket(BUCKET_NAME);
     const ymd = new Date().toISOString().slice(0, 10);
     const dest = `${DAILY_SNAPSHOT_FOLDER}/app.db.${ymd}`;

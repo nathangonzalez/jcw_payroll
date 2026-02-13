@@ -99,9 +99,25 @@ if (process.env.NODE_ENV === 'production') {
   } catch (err) {
     console.warn('[startup] restoreFromCloud failed', err?.message || err);
   }
+  // Diagnostic: verify the file on disk before openDb touches it
+  try {
+    if (fs.existsSync(DB_PATH)) {
+      const stat = fs.statSync(DB_PATH);
+      console.log(`[startup] DB file before openDb: ${DB_PATH} size=${stat.size}`);
+    } else {
+      console.warn(`[startup] DB file MISSING before openDb: ${DB_PATH}`);
+    }
+  } catch (e) { console.warn('[startup] stat check failed', e?.message); }
 }
 
 const db = openDb();
+
+// Diagnostic: verify entry count immediately after openDb
+try {
+  const postOpen = db.prepare('SELECT COUNT(*) as n FROM time_entries').get();
+  const postCust = db.prepare('SELECT COUNT(*) as n FROM customers').get();
+  console.log(`[startup] After openDb: ${postOpen?.n || 0} entries, ${postCust?.n || 0} customers`);
+} catch (e) { console.warn('[startup] post-openDb check failed', e?.message); }
 
 // Schedule backups to Cloud Storage so data persists beyond ephemeral instances
 if (process.env.NODE_ENV === 'production') {
