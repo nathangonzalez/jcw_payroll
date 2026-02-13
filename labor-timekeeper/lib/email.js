@@ -13,12 +13,13 @@
 
 import nodemailer from 'nodemailer';
 
-// Create reusable transporter
-let transporter = null;
+const MAX_RETRIES = 3;
+const BASE_DELAY_MS = 2000; // 2s, 4s, 8s exponential backoff
 
-function getTransporter() {
-  if (transporter) return transporter;
-  
+/**
+ * Create a fresh SMTP transporter (no connection pooling to avoid stale connections)
+ */
+function createTransporter() {
   const host = process.env.SMTP_HOST || 'smtp.gmail.com';
   const port = parseInt(process.env.SMTP_PORT || '587');
   const user = process.env.SMTP_USER;
@@ -28,18 +29,25 @@ function getTransporter() {
     throw new Error('SMTP_USER and SMTP_PASS environment variables required for email');
   }
   
-  transporter = nodemailer.createTransport({
+  return nodemailer.createTransport({
     host,
     port,
-    secure: port === 465, // true for 465, false for other ports
+    secure: port === 465,
     auth: { user, pass },
+    pool: false,              // Fresh connection each time (avoids 421 stale conn)
+    connectionTimeout: 10000, // 10s connection timeout
+    greetingTimeout: 10000,   // 10s EHLO timeout
+    socketTimeout: 30000,     // 30s socket timeout
   });
-  
-  return transporter;
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 /**
- * Send an email with optional attachments
+ * Send an email with optional attachments. Retries up to 3 times with exponential backoff
+ * to handle Gmail SMTP 421-4.7.0 rate limiting from App Engine shared IPs.
  * @param {Object} options
  * @param {string} options.to - Recipient email(s), comma-separated
  * @param {string} options.subject - Email subject
@@ -49,7 +57,6 @@ function getTransporter() {
  * @returns {Promise<Object>} - Nodemailer send result
  */
 export async function sendEmail({ to, subject, text, html, attachments = [] }) {
-  const transport = getTransporter();
   const from = process.env.SMTP_USER;
   
   const mailOptions = {
@@ -61,9 +68,30 @@ export async function sendEmail({ to, subject, text, html, attachments = [] }) {
     attachments,
   };
   
-  const result = await transport.sendMail(mailOptions);
-  console.log(`[email] Sent to ${to}: ${subject}`);
-  return result;
+  let lastError = null;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const transport = createTransporter();
+      const result = await transport.sendMail(mailOptions);
+      console.log(`[email] Sent to ${to}: ${subject} (attempt ${attempt})`);
+      try { transport.close(); } catch (_) {}
+      return result;
+    } catch (err) {
+      lastError = err;
+      const errMsg = err?.message || String(err);
+      console.warn(`[email] Attempt ${attempt}/${MAX_RETRIES} failed: ${errMsg}`);
+      
+      // Only retry on transient errors (421, ECONNRESET, ETIMEDOUT)
+      const isTransient = /421|ECONNRESET|ETIMEDOUT|ECONNREFUSED|socket hang up/i.test(errMsg);
+      if (!isTransient || attempt === MAX_RETRIES) break;
+      
+      const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+      console.log(`[email] Retrying in ${delay}ms...`);
+      await sleep(delay);
+    }
+  }
+  
+  throw lastError;
 }
 
 /**
