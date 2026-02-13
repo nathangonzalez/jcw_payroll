@@ -17,7 +17,7 @@ import { generateMonthlyExport } from "./lib/export/generateMonthly.js";
 import { getHolidaysForYear, getHolidaysInRange } from "./lib/holidays.js";
 import { getBillRate } from "./lib/billing.js";
 import { sendMonthlyReport, sendEmail } from "./lib/email.js";
-import { archiveAndClearPayroll, listArchives, restoreFromCloud, downloadBackupTo, scheduleBackups, scheduleDailySnapshots, snapshotDailyToCloud, backupToCloud } from "./lib/storage.js";
+import { archiveAndClearPayroll, listArchives, restoreFromCloud, restoreFromDailySnapshot, verifyDbEntries, downloadBackupTo, scheduleBackups, scheduleDailySnapshots, snapshotDailyToCloud, backupToCloud } from "./lib/storage.js";
 import { loadSecrets } from "./lib/secrets.js";
 import { migrate } from "./lib/migrate.js";
 import { ensureEmployees, getEmployeesDBOrDefault } from "./lib/bootstrap.js";
@@ -93,26 +93,56 @@ if (process.env.NODE_ENV !== 'production') {
   }
 }
 
+// ── Hardened cold-start restore: retry + snapshot fallback + verification ──
+let _restoreOk = false;
 if (process.env.NODE_ENV === 'production') {
-  try {
-    await restoreFromCloud(DB_PATH);
-  } catch (err) {
-    console.warn('[startup] restoreFromCloud failed', err?.message || err);
-  }
-  // Diagnostic: verify the file on disk before openDb touches it
-  try {
-    if (fs.existsSync(DB_PATH)) {
-      const stat = fs.statSync(DB_PATH);
-      console.log(`[startup] DB file before openDb: ${DB_PATH} size=${stat.size}`);
-    } else {
-      console.warn(`[startup] DB file MISSING before openDb: ${DB_PATH}`);
+  // Layer 1: Try main backup with retries
+  for (let attempt = 1; attempt <= 3 && !_restoreOk; attempt++) {
+    try {
+      console.log(`[startup] Restore attempt ${attempt}/3 from main backup…`);
+      const restored = await restoreFromCloud(DB_PATH);
+      if (restored) {
+        const n = verifyDbEntries(DB_PATH);
+        console.log(`[startup] Attempt ${attempt}: restored=${restored}, entries=${n}`);
+        if (n > 0) { _restoreOk = true; break; }
+        console.warn(`[startup] Attempt ${attempt}: file downloaded but 0 entries`);
+      } else {
+        console.warn(`[startup] Attempt ${attempt}: restoreFromCloud returned false`);
+      }
+    } catch (err) {
+      console.warn(`[startup] Attempt ${attempt} failed:`, err?.message || err);
     }
-  } catch (e) { console.warn('[startup] stat check failed', e?.message); }
+    if (!_restoreOk && attempt < 3) {
+      console.log(`[startup] Waiting 2s before retry…`);
+      await new Promise(r => setTimeout(r, 2000));
+    }
+  }
+
+  // Layer 2: Fallback to daily snapshots
+  if (!_restoreOk) {
+    console.warn('[startup] Main backup failed after 3 attempts, trying daily snapshots…');
+    try {
+      const snapshotOk = await restoreFromDailySnapshot(DB_PATH);
+      if (snapshotOk) {
+        const n = verifyDbEntries(DB_PATH);
+        console.log(`[startup] Snapshot restore: entries=${n}`);
+        if (n > 0) _restoreOk = true;
+      }
+    } catch (err) {
+      console.warn('[startup] Daily snapshot restore failed:', err?.message || err);
+    }
+  }
+
+  if (_restoreOk) {
+    console.log('[startup] ✓ Database restored successfully');
+  } else {
+    console.error('[startup] ✗ ALL restore attempts failed — starting with empty DB');
+  }
 }
 
 const db = openDb();
 
-// Diagnostic: verify entry count immediately after openDb
+// Post-openDb verification
 try {
   const postOpen = db.prepare('SELECT COUNT(*) as n FROM time_entries').get();
   const postCust = db.prepare('SELECT COUNT(*) as n FROM customers').get();

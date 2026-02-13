@@ -396,6 +396,70 @@ export async function snapshotDailyToCloud(dbPath) {
 }
 
 /**
+ * Verify a local database file has time_entries data
+ * @param {string} dbPath - Path to the database file
+ * @returns {number} - Number of time entries found (0 if empty/corrupt/missing)
+ */
+export function verifyDbEntries(dbPath) {
+  try {
+    if (!fs.existsSync(dbPath)) return 0;
+    const db = new Database(dbPath, { readonly: true });
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
+    if (!tables.some(t => t.name === 'time_entries')) { db.close(); return 0; }
+    const n = db.prepare('SELECT COUNT(*) as n FROM time_entries').get()?.n || 0;
+    db.close();
+    return n;
+  } catch (err) {
+    console.warn('[storage] verifyDbEntries failed:', err?.message || err);
+    return 0;
+  }
+}
+
+/**
+ * Restore from the most recent daily snapshot in Cloud Storage
+ * Fallback when main backup is empty/corrupt/missing
+ * @param {string} dbPath - Local path to restore to
+ * @returns {Promise<boolean>} - true if restored successfully
+ */
+export async function restoreFromDailySnapshot(dbPath) {
+  if (process.env.NODE_ENV !== 'production') return false;
+  try {
+    const bucket = getStorage().bucket(BUCKET_NAME);
+    const [files] = await bucket.getFiles({ prefix: `${DAILY_SNAPSHOT_FOLDER}/app.db.` });
+    if (!files || files.length === 0) {
+      console.log('[storage] No daily snapshots found');
+      return false;
+    }
+    // Sort by name descending to get most recent (YYYY-MM-DD sorts correctly)
+    files.sort((a, b) => b.name.localeCompare(a.name));
+    
+    const dir = path.dirname(dbPath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    
+    // Try each snapshot starting from most recent
+    for (const file of files.slice(0, 5)) {
+      try {
+        console.log(`[storage] Trying daily snapshot: ${file.name}`);
+        await file.download({ destination: dbPath });
+        const n = verifyDbEntries(dbPath);
+        if (n > 0) {
+          console.log(`[storage] Restored from daily snapshot ${file.name}: ${n} entries`);
+          return true;
+        }
+        console.warn(`[storage] Snapshot ${file.name} has 0 entries, trying older...`);
+      } catch (err) {
+        console.warn(`[storage] Snapshot ${file.name} download failed:`, err?.message);
+      }
+    }
+    console.warn('[storage] All daily snapshots exhausted, none had entries');
+    return false;
+  } catch (err) {
+    console.error('[storage] restoreFromDailySnapshot failed:', err?.message || err);
+    return false;
+  }
+}
+
+/**
  * Schedule periodic backups
  * @param {string} dbPath - Database path
  * @param {number} intervalMs - Backup interval in milliseconds (default 5 minutes)
