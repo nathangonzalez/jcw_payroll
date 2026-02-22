@@ -10,6 +10,10 @@ export async function migrate(db) {
   await ensureColumn(db, 'time_entries', 'end_time', "TEXT DEFAULT ''");
   await ensureColumn(db, 'employees', 'role', "TEXT NOT NULL DEFAULT 'hourly'");
   await ensureColumn(db, 'employees', 'aliases_json', "TEXT DEFAULT '[]'");
+  await ensureColumn(db, 'employees', 'client_bill_rate', "REAL DEFAULT NULL");
+
+  // Seed client_bill_rate for existing employees if NULL
+  await seedClientBillRates(db);
 
   // Ensure weekly comments table exists
   db.exec(`
@@ -52,6 +56,45 @@ export async function migrate(db) {
     }
   } catch (e) {
     console.error('[migrate] Seed check failed:', String(e));
+  }
+}
+
+/**
+ * Seed client_bill_rate for employees that don't have one set yet.
+ * These are the client-facing billing rates (what JCW charges customers),
+ * distinct from default_bill_rate (what JCW pays employees internally).
+ *
+ * Rate hierarchy:
+ *   - default_bill_rate = internal pay rate (payroll reports)
+ *   - client_bill_rate  = client-facing rate (billing reports)
+ *   - rate_overrides    = per-customer per-employee overrides (both reports)
+ */
+async function seedClientBillRates(db) {
+  const CLIENT_RATES = {
+    "Boban Abbate": 90,
+    "Chris Zavesky": 90,
+    "Chris Jacobi": 90,
+    "Thomas Brinson": 90,
+    "Phil Henderson": 90,
+    "Jason Green": 75,
+    "Doug Kinsey": 65,
+    "Sean Matthew": 40,
+  };
+
+  try {
+    const update = db.prepare(
+      "UPDATE employees SET client_bill_rate = ? WHERE LOWER(name) = LOWER(?) AND client_bill_rate IS NULL"
+    );
+    let count = 0;
+    for (const [name, rate] of Object.entries(CLIENT_RATES)) {
+      const result = update.run(rate, name);
+      if (result.changes > 0) count++;
+    }
+    if (count > 0) {
+      console.log(`[migrate] Seeded client_bill_rate for ${count} employees`);
+    }
+  } catch (e) {
+    console.error('[migrate] seedClientBillRates failed:', String(e));
   }
 }
 

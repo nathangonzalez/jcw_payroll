@@ -15,7 +15,7 @@ import { buildMonthlyWorkbook } from "./lib/export_excel.js";
 import { generateWeeklyExports } from "./lib/export/generateWeekly.js";
 import { generateMonthlyExport } from "./lib/export/generateMonthly.js";
 import { getHolidaysForYear, getHolidaysInRange } from "./lib/holidays.js";
-import { getBillRate } from "./lib/billing.js";
+import { getBillRate, buildBillingRatesMap } from "./lib/billing.js";
 import { sendMonthlyReport, sendEmail } from "./lib/email.js";
 import { archiveAndClearPayroll, listArchives, restoreFromCloud, restoreFromDailySnapshot, verifyDbEntries, downloadBackupTo, scheduleBackups, scheduleDailySnapshots, snapshotDailyToCloud, backupToCloud } from "./lib/storage.js";
 import { loadSecrets } from "./lib/secrets.js";
@@ -1092,16 +1092,9 @@ app.get("/api/export/monthly-billing", async (req, res) => {
     const month = String(req.query.month || "").trim();
     if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: "month=YYYY-MM required" });
 
-    const billingRates = {
-      "Boban Abbate": 90,
-      "Chris Zavesky": 90,
-      "Chris Jacobi": 90,
-      "Thomas Brinson": 90,
-      "Phil Henderson": 90,
-      "Jason Green": 75,
-      "Doug Kinsey": 65,
-      "Sean Matthew": 40
-    };
+    // Client-facing billing rates loaded from DB (employees.client_bill_rate)
+    // Previously hardcoded — now managed via DB for parity with payroll logic
+    const billingRates = buildBillingRatesMap(db);
 
     const result = await generateMonthlyExport({ db, month, billingRates });
     const fileBuffer = fs.readFileSync(result.filepath);
