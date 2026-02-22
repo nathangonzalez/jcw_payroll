@@ -7,6 +7,15 @@
 
 ---
 
+## Tooling
+
+| Tool | Status |
+|------|--------|
+| **Cline (VSCode)** | Historical — `labor-timekeeper/SUPER_PROMPT_FOR_CLINE.md` kept as reference |
+| **GitHub Copilot Coding Agent** | Active — uses `AGENTS.md` + `MEMORY.md` for context; issues spawn as `copilot/` PRs |
+
+---
+
 ## Project Overview
 
 **JCW Labor Timekeeper** — Construction crew time tracking PWA with voice input and payroll export.

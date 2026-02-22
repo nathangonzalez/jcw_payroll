@@ -1,4 +1,11 @@
-# SUPER PROMPT (Cline) — Labor Timekeeper MVP
+# SUPER PROMPT (Cline) — Labor Timekeeper MVP [HISTORICAL REFERENCE]
+
+> ⚠️ **This file was used with Cline in VSCode.**
+> As of 2026-02-22, the primary context for GitHub Copilot Coding Agent is maintained in:
+> - `/MEMORY.md` — curated project state, backlog, and deploy notes
+> - `/AGENTS.md` — agent instructions and workspace conventions
+> Daily session logs live in `memory/YYYY-MM-DD.md`.
+> This file is kept for reference only.
 
 Goal: Ensure the repo runs on first try and supports:
 - Employee login (name+PIN)
