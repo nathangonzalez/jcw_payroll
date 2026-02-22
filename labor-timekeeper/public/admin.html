@@ -504,6 +504,7 @@ function renderSubmitted(rows, comments){
       <thead><tr>
         <th><input type="checkbox" id="selectAll" title="Select All" /></th>
         <th>Date</th><th>Employee</th><th>Customer</th><th>Hours</th>
+        <th>Action</th>
       </tr></thead>
       <tbody>
         ${rows.map(r=>`
@@ -513,11 +514,12 @@ function renderSubmitted(rows, comments){
             <td>${r.employee_name}</td>
             <td>${r.customer_name}</td>
             <td>${Number(r.hours)}</td>
+            <td><button class="delete-entry-btn badge" data-id="${r.id}" style="background:#e74c3c;color:white;padding:4px 8px;font-size:11px;">🗑️</button></td>
           </tr>
         `).join('')}
       </tbody>
       <tfoot><tr style="font-weight:bold; background:#f0f0f0;">
-        <td></td><td colspan="3">Total (${rows.length} entries)</td><td>${totalHours}</td>
+        <td></td><td colspan="3">Total (${rows.length} entries)</td><td>${totalHours}</td><td></td>
       </tr></tfoot>
     </table>
     ${commentRows ? `
@@ -539,6 +541,11 @@ function renderSubmitted(rows, comments){
   // Update Select All when individual boxes change
   document.querySelectorAll('.entry-cb').forEach(cb => {
     cb.onchange = updateSelectAllState;
+  });
+
+  // Attach delete button handlers
+  document.querySelectorAll('.delete-entry-btn').forEach(btn => {
+    btn.onclick = () => deleteEntry(btn.getAttribute('data-id'));
   });
 }
 
@@ -562,6 +569,18 @@ async function approveSelected(){
   });
   alert(`Approved ${ids.length} entries!`);
   await loadSubmitted();
+}
+
+// Delete entry handler
+async function deleteEntry(id) {
+  if (!confirm('Delete this entry? This cannot be undone.')) return;
+  try {
+    await api('/api/time-entries/' + id + '?force=true', { method: 'DELETE' });
+    alert('Entry deleted!');
+    await loadSubmitted();
+  } catch (e) {
+    alert('Delete failed: ' + e.message);
+  }
 }
 
 init().catch(e=>{

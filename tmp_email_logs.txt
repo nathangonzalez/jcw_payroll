@@ -1,0 +1,1 @@
+2026-02-13 11:14:13 labor-timekeeper[jcw6]  [email] Failed to send submit-week notification Server terminates connection. response=421-4.7.0 Try again later, closing connection. (EHLO)

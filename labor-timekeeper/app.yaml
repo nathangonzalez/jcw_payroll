@@ -3,6 +3,8 @@
 
 runtime: nodejs22
 service: labor-timekeeper
+inbound_services:
+  - warmup
 
 instance_class: F1
 
@@ -32,8 +34,11 @@ automatic_scaling:
   max_instances: 1
   target_cpu_utilization: 0.65
 
-# Handlers
+# Warmup - required for traffic migration
 handlers:
+  - url: /_ah/warmup
+    script: auto
+    login: admin
   - url: /.*
     script: auto
     secure: always

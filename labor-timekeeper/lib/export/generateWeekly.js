@@ -253,12 +253,11 @@ export async function generateWeeklyExports({ db, weekStart }) {
       empTotalAmount += total;
     }
 
-    const desiredTotalRow = 40; // +1 for name title row
-    while (ws.rowCount < desiredTotalRow - 1) {
-      ws.addRow(["", "", "", "", "", "", "", "", "", "", "", ""]);
-    }
+    // Add 2 spacer rows so totals aren't jammed against data, but don't force to row 40
+    ws.addRow(["", "", "", "", "", "", "", "", "", "", "", ""]);
+    ws.addRow(["", "", "", "", "", "", "", "", "", "", "", ""]);
 
-    const totalRowIndex = desiredTotalRow;
+    const totalRowIndex = ws.rowCount + 1;
     const totalRow = ["", "", "", "", "Total:", { formula: `SUM(F3:F${totalRowIndex - 1})` }, "", "", "", "", "", ""];
     const totalRowObj = ws.addRow(totalRow);
     if (weekComment) {

@@ -59,14 +59,15 @@ try {
 # Step 2: Force immediate backup on current serving instance
 Write-Host "[2/4] Forcing backup on current serving instance..." -ForegroundColor Yellow
 try {
-  # Use the approve endpoint with empty ids to trigger backupToCloud (it runs backup even with 0 ids)
-  # Or better: hit the health endpoint after triggering a write - the scheduled backup will catch it.
-  # Safest: just wait for the SIGTERM handler we added. But let's also do an explicit backup trigger.
-  # We'll use a lightweight POST that triggers backupToCloud - /api/admin/clear-comments is safe (deletes nothing if empty)
-  $backupResp = curl.exe -s -X POST "$baseUrl/api/approve" -H "Content-Type: application/json" -d '{"ids":[]}' | ConvertFrom-Json
-  Write-Host "  Backup triggered (approve endpoint touched)" -ForegroundColor Green
+  # Use the new force-backup endpoint
+  $backupResp = curl.exe -s -X POST "$baseUrl/api/admin/force-backup" -H "Content-Type: application/json" | ConvertFrom-Json
+  if ($backupResp.ok) {
+    Write-Host "  Backup triggered successfully" -ForegroundColor Green
+  } else {
+    Write-Warning "  Backup returned: $($backupResp | ConvertTo-Json)"
+  }
 } catch {
-  Write-Warning "Could not trigger explicit backup: $_ (SIGTERM handler will cover this)"
+  Write-Warning "Could not trigger explicit backup: $_"
 }
 
 # Step 3: Verify GCS backup freshness

@@ -671,7 +671,11 @@ app.delete('/api/time-entries/:id', (req, res) => {
     const entry = db.prepare('SELECT id, employee_id, status FROM time_entries WHERE id = ?').get(teId);
     if (!entry) return res.status(404).json({ error: 'time entry not found' });
     if (entry.employee_id !== employeeId) return res.status(403).json({ error: 'not authorized to delete this entry' });
-    if (entry.status && entry.status !== 'DRAFT') return res.status(409).json({ error: 'only DRAFT entries can be deleted' });
+    // Allow admin force-delete regardless of status
+    const isAdmin = req.headers['x-admin-secret'] === (process.env.ADMIN_PIN || '7707');
+    const forceDelete = req.query.force === 'true' || req.body?.force === true;
+    if (!forceDelete && entry.status && entry.status !== 'DRAFT') return res.status(409).json({ error: 'only DRAFT entries can be deleted (use ?force=true with admin)' });
+    if (forceDelete && !isAdmin) return res.status(403).json({ error: 'force delete requires admin auth' });
 
     const r = db.prepare('DELETE FROM time_entries WHERE id = ?').run(teId);
     res.json({ ok: true, deleted: r.changes || 0 });
@@ -878,6 +882,36 @@ app.post("/api/approve", async (req, res) => {
   }
 
   res.json({ ok: true, approved: ids.length });
+});
+
+// Admin: force backup to cloud (for safe-promote workflow)
+app.post("/api/admin/force-backup", async (req, res) => {
+  try {
+    await backupToCloud(DB_PATH);
+    res.json({ ok: true, message: 'Backup triggered' });
+  } catch (err) {
+    console.error('[force-backup] failed:', err?.message || err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+// Admin: get ALL entries for a week (not just SUBMITTED) - for delete functionality
+app.get("/api/admin/all-entries", (req, res) => {
+  const weekStart = String(req.query.week_start || getDefaultAdminWeekStart(db));
+  const { ordered } = weekDates(weekStart);
+  const start = ordered[0].ymd;
+  const end = ordered[6].ymd;
+
+  const rows = db.prepare(`
+    SELECT te.*, e.name as employee_name, c.name as customer_name
+    FROM time_entries te
+    JOIN employees e ON e.id = te.employee_id
+    JOIN customers c ON c.id = te.customer_id
+    WHERE te.work_date >= ? AND te.work_date <= ?
+    ORDER BY te.work_date ASC, e.name ASC
+  `).all(start, end);
+
+  res.json({ week_start: weekStart, entries: rows });
 });
 
 // Admin preview of monthly report (HTML-friendly data)
