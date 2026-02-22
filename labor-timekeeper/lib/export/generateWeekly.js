@@ -253,19 +253,22 @@ export async function generateWeeklyExports({ db, weekStart }) {
       empTotalAmount += total;
     }
 
-    // Add 2 spacer rows so totals aren't jammed against data, but don't force to row 40
-    ws.addRow(["", "", "", "", "", "", "", "", "", "", "", ""]);
+    // Add 1 spacer row before totals for clean separation
     ws.addRow(["", "", "", "", "", "", "", "", "", "", "", ""]);
 
     const totalRowIndex = ws.rowCount + 1;
     const totalRow = ["", "", "", "", "Total:", { formula: `SUM(F3:F${totalRowIndex - 1})` }, "", "", "", "", "", ""];
     const totalRowObj = ws.addRow(totalRow);
+    totalRowObj.font = { bold: true };
+    totalRowObj.getCell(5).border = { top: { style: 'thin' }, bottom: { style: 'double' } };
+    totalRowObj.getCell(6).border = { top: { style: 'thin' }, bottom: { style: 'double' } };
     if (weekComment) {
       totalRowObj.getCell(7).value = "Comment:";
       totalRowObj.getCell(8).value = weekComment;
     }
 
     // Right panel summary (client totals)
+    // Dynamic row count: place TOTAL row right after last summary entry + 1 blank
     const preferredOrder = ["Hall", "Howard", "Lucas", "Richer", "", "PTO ", "Holiday Pay"];
     const rateSet = new Set([...summaryMap.values()].map(s => s.rate).filter(r => r !== "" && r != null));
     const singleRate = rateSet.size === 1 ? [...rateSet][0] : "";
@@ -286,8 +289,12 @@ export async function generateWeeklyExports({ db, weekStart }) {
     remaining.sort((a, b) => a.name.localeCompare(b.name));
     summaryRows.push(...remaining);
 
+    // Compute dynamic summary total row: max of (left panel total + 2) or (summary entries + header + 2)
+    const summaryEntryCount = summaryRows.length;
+    const minSummaryTotalRow = 3 + summaryEntryCount + 1; // header=2, data starts 3, +1 for spacing
+    const summaryTotalRow = Math.max(minSummaryTotalRow, totalRowIndex + 1);
+
     let rIdx = 3;
-    const summaryTotalRow = 22; // template TOTAL row (+1 for name row)
     for (const s of summaryRows) {
       if (rIdx >= summaryTotalRow) break;
       const row = ws.getRow(rIdx);
@@ -295,21 +302,36 @@ export async function generateWeeklyExports({ db, weekStart }) {
       row.getCell(10).value = { formula: `IF(I${rIdx}="","",SUMIF($B$3:$B$${totalRowIndex - 1},TRIM(I${rIdx}),$F$3:$F$${totalRowIndex - 1}))` };
       row.getCell(11).value = s.name ? s.rate : "";
       row.getCell(12).value = { formula: `IF(OR(J${rIdx}="",K${rIdx}=""),"",J${rIdx}*K${rIdx})` };
+      // Add borders to right panel cells
+      for (const c of [9, 10, 11, 12]) {
+        row.getCell(c).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+      }
       rIdx++;
     }
+    // Fill remaining rows up to total with empty bordered cells
     while (rIdx < summaryTotalRow) {
       const row = ws.getRow(rIdx);
       row.getCell(9).value = "";
       row.getCell(10).value = { formula: `IF(I${rIdx}="","",SUMIF($B$3:$B$${totalRowIndex - 1},TRIM(I${rIdx}),$F$3:$F$${totalRowIndex - 1}))` };
       row.getCell(11).value = "";
       row.getCell(12).value = { formula: `IF(OR(J${rIdx}="",K${rIdx}=""),"",J${rIdx}*K${rIdx})` };
+      for (const c of [9, 10, 11, 12]) {
+        row.getCell(c).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
+      }
       rIdx++;
     }
     const totalSummaryRow = ws.getRow(summaryTotalRow);
     totalSummaryRow.getCell(9).value = "TOTAL:";
+    totalSummaryRow.getCell(9).font = { bold: true };
     totalSummaryRow.getCell(10).value = { formula: `SUM(J3:J${summaryTotalRow - 1})` };
+    totalSummaryRow.getCell(10).font = { bold: true };
     totalSummaryRow.getCell(11).value = singleRate;
     totalSummaryRow.getCell(12).value = { formula: `IF(OR(J${summaryTotalRow}="",K${summaryTotalRow}=""),"",J${summaryTotalRow}*K${summaryTotalRow})` };
+    totalSummaryRow.getCell(12).font = { bold: true };
+    // Double bottom border on summary total row
+    for (const c of [9, 10, 11, 12]) {
+      totalSummaryRow.getCell(c).border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'double' }, right: { style: 'thin' } };
+    }
 
     ws.getColumn(3).numFmt = 'h:mm AM/PM';
     ws.getColumn(4).numFmt = 'h:mm';
@@ -558,7 +580,7 @@ function formatSheet(ws) {
       else if (typeof val === 'object' && val.text) s = String(val.text);
       else s = String(val);
       colMax[colNumber] = Math.max(colMax[colNumber] || 0, s.length);
-      if (rowNumber > 1) {
+      if (rowNumber > 1 && colNumber !== 8) {
         cell.border = { top: { style: 'thin' }, left: { style: 'thin' }, bottom: { style: 'thin' }, right: { style: 'thin' } };
       }
       if (typeof cell.value === 'number') cell.alignment = { horizontal: 'right' };
