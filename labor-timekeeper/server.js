@@ -665,17 +665,23 @@ app.post("/api/time-entries", (req, res) => {
 app.delete('/api/time-entries/:id', (req, res) => {
   try {
     const teId = req.params.id;
-    const employeeId = req.body?.employee_id || req.query.employee_id;
-    if (!employeeId) return res.status(400).json({ error: 'employee_id required' });
+    const isAdmin = req.headers['x-admin-secret'] === (process.env.ADMIN_PIN || '7707');
+    const forceDelete = req.query.force === 'true' || req.body?.force === true;
 
     const entry = db.prepare('SELECT id, employee_id, status FROM time_entries WHERE id = ?').get(teId);
     if (!entry) return res.status(404).json({ error: 'time entry not found' });
+
+    // Admin force-delete: skip employee_id and status checks
+    if (isAdmin && forceDelete) {
+      const r = db.prepare('DELETE FROM time_entries WHERE id = ?').run(teId);
+      return res.json({ ok: true, deleted: r.changes || 0 });
+    }
+
+    // Normal employee delete: require employee_id ownership
+    const employeeId = req.body?.employee_id || req.query.employee_id;
+    if (!employeeId) return res.status(400).json({ error: 'employee_id required' });
     if (entry.employee_id !== employeeId) return res.status(403).json({ error: 'not authorized to delete this entry' });
-    // Allow admin force-delete regardless of status
-    const isAdmin = req.headers['x-admin-secret'] === (process.env.ADMIN_PIN || '7707');
-    const forceDelete = req.query.force === 'true' || req.body?.force === true;
-    if (!forceDelete && entry.status && entry.status !== 'DRAFT') return res.status(409).json({ error: 'only DRAFT entries can be deleted (use ?force=true with admin)' });
-    if (forceDelete && !isAdmin) return res.status(403).json({ error: 'force delete requires admin auth' });
+    if (entry.status && entry.status !== 'DRAFT') return res.status(409).json({ error: 'only DRAFT entries can be deleted (use ?force=true with admin)' });
 
     const r = db.prepare('DELETE FROM time_entries WHERE id = ?').run(teId);
     res.json({ ok: true, deleted: r.changes || 0 });

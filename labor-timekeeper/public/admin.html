@@ -45,6 +45,12 @@
 
       <div class="row" style="margin-top:12px;">
         <div class="col"><button id="approveBtn" class="primary">Approve Selected</button></div>
+        <div class="col"><button id="allEntriesBtn" style="background:#8e44ad;color:white;">All Entries</button></div>
+      </div>
+
+      <div id="allEntries" style="margin-top:12px;display:none;">
+        <h3>All Entries (DRAFT, SUBMITTED, APPROVED)</h3>
+        <div id="allEntriesList"></div>
       </div>
 
       <hr/>
@@ -248,6 +254,7 @@ async function loadMonth(month){
 
 async function init(){
   el('approveBtn').onclick = approveSelected;
+  el('allEntriesBtn').onclick = loadAllEntries;
   if (el('loadWeekBtn')) {
     el('loadWeekBtn').onclick = async () => {
       const ws = el('weekSelect')?.value || CURRENT_WEEK_START;
@@ -578,8 +585,61 @@ async function deleteEntry(id) {
     await api('/api/time-entries/' + id + '?force=true', { method: 'DELETE' });
     alert('Entry deleted!');
     await loadSubmitted();
+    await loadAllEntries();
   } catch (e) {
     alert('Delete failed: ' + e.message);
+  }
+}
+
+// Load all entries (not just submitted)
+async function loadAllEntries() {
+  const div = el('allEntries');
+  const list = el('allEntriesList');
+  div.style.display = 'block';
+  list.innerHTML = '<p>Loading...</p>';
+  
+  try {
+    const qs = CURRENT_WEEK_START ? ('?week_start=' + encodeURIComponent(CURRENT_WEEK_START)) : '';
+    const data = await api('/api/admin/all-entries' + qs);
+    const entries = data.entries || [];
+    
+    if (!entries.length) {
+      list.innerHTML = '<p class="muted">No entries for this week.</p>';
+      return;
+    }
+    
+    // Group by employee
+    const byEmp = {};
+    for (const e of entries) {
+      const name = e.employee_name || 'Unknown';
+      if (!byEmp[name]) byEmp[name] = [];
+      byEmp[name].push(e);
+    }
+    
+    let html = '<table><thead><tr><th>Date</th><th>Employee</th><th>Customer</th><th>Hours</th><th>Status</th><th>Action</th></tr></thead><tbody>';
+    for (const emp of Object.keys(byEmp).sort()) {
+      for (const r of byEmp[emp]) {
+        const statusColor = r.status === 'APPROVED' ? '#27ae60' : (r.status === 'SUBMITTED' ? '#f39c12' : '#95a5a6');
+        html += `
+          <tr>
+            <td>${r.work_date}</td>
+            <td>${r.employee_name}</td>
+            <td>${r.customer_name}</td>
+            <td>${Number(r.hours)}</td>
+            <td><span style="background:${statusColor};color:white;padding:2px 6px;border-radius:3px;font-size:11px;">${r.status}</span></td>
+            <td><button class="delete-entry-btn badge" data-id="${r.id}" style="background:#e74c3c;color:white;padding:4px 8px;font-size:11px;">🗑️</button></td>
+          </tr>`;
+      }
+    }
+    html += '</tbody></table>';
+    list.innerHTML = html;
+    
+    // Attach delete handlers
+    document.querySelectorAll('#allEntriesList .delete-entry-btn').forEach(btn => {
+      btn.onclick = () => deleteEntry(btn.getAttribute('data-id'));
+    });
+  } catch (err) {
+    list.innerHTML = '<p style="color:red;">Error: ' + err.message + '</p>';
   }
 }
 
