@@ -1,0 +1,10 @@
+{
+  "date": "2026-02-22",
+  "daily_budget_usd": 5.00,
+  "spent_usd": 0.00,
+  "transactions": [],
+  "alerts_sent": {
+    "warning_80pct": false,
+    "limit_100pct": false
+  }
+}
