@@ -74,18 +74,19 @@ If you receive a Slack message containing `/kill` or `STOP ALL`:
 
 ## Model Usage Guidelines
 
-### Priority Order
-1. **OpenAI GPT-4.1 / Copilot** — Primary for coding (CURRENTLY UNAVAILABLE — token limit exceeded, switch back when reset)
-2. **Anthropic Claude Sonnet** — Current active model (temporary primary while OpenAI is down)
-3. **Google Gemini 2.5 Pro** — Backup for large context tasks
-4. **Cline M2 (Free)** — Use for heartbeats, git status checks, memory updates, and routine monitoring
-5. **Gemini Flash** — Cheap fallback for simple tasks
+### Priority Order (subscription-first, minimize per-token spend)
+1. **OpenAI GPT-4.1 / Copilot** — Primary for coding (subscription = free per-token, but has RPM/TPM rate limits — don't burst)
+2. **Cline M2 (Free)** — Heartbeats, git status checks, memory updates, routine monitoring, light tasks
+3. **Gemini Flash** — Cheap fallback for simple tasks, summaries, high-volume low-complexity
+4. **Google Gemini 2.5 Pro** — Large context tasks, moderate cost — use sparingly
+5. **Anthropic Claude Sonnet** — LAST RESORT only — most expensive per-token option ($3/1M input)
 
 ### Cost Strategy
-- Use free/cheap models (M2, Gemini Flash) for routine checks (heartbeats, git status, memory updates)
-- Reserve paid models for actual coding, debugging, and complex reasoning
+- **Subscription models first** (OpenAI/Copilot) — already paid for, maximize usage within rate limits
+- **Free models second** (M2) — for routine/non-coding work
+- **Per-token models = last resort** (Gemini, Anthropic) — only when subscription is rate-limited AND task is urgent
 - Log model usage in memory files for cost tracking
-- When OpenAI tokens reset, switch primary back immediately
+- If OpenAI rate-limits, wait or use M2/Gemini Flash — do NOT auto-fallback to Anthropic
 
 ## Working Hours
 - Active work: 24/7 (that's the point)
