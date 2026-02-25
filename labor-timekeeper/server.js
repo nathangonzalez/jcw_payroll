@@ -14,6 +14,7 @@ import { getOpenAI } from "./lib/openai.js";
 import { buildMonthlyWorkbook } from "./lib/export_excel.js";
 import { generateWeeklyExports } from "./lib/export/generateWeekly.js";
 import { generateMonthlyExport } from "./lib/export/generateMonthly.js";
+import { generatePrintableReport } from "./lib/export/generatePrintable.js";
 import { getHolidaysForYear, getHolidaysInRange } from "./lib/holidays.js";
 import { getBillRate, buildBillingRatesMap } from "./lib/billing.js";
 import { sendMonthlyReport, sendEmail } from "./lib/email.js";
@@ -1103,6 +1104,25 @@ app.get("/api/export/monthly-billing", async (req, res) => {
     res.send(fileBuffer);
   } catch (err) {
     console.error(err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
+/**
+ * Printable HTML report - one-click print all timesheets
+ * GET /api/admin/print-week?week_start=YYYY-MM-DD
+ */
+app.get("/api/admin/print-week", (req, res) => {
+  try {
+    const weekStart = String(req.query.week_start || weekStartYMD(new Date())).trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) {
+      return res.status(400).json({ error: "week_start=YYYY-MM-DD required" });
+    }
+    const html = generatePrintableReport({ db, weekStart });
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(html);
+  } catch (err) {
+    console.error("[print-week]", err);
     res.status(500).json({ error: String(err?.message || err) });
   }
 });
