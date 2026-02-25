@@ -1,0 +1,26 @@
+# Google Cloud App Engine Configuration (PROXY MODE)
+# Deploy with: gcloud app deploy app_proxy.yaml
+
+runtime: nodejs22
+service: labor-timekeeper
+inbound_services:
+  - warmup
+
+instance_class: F1
+
+# Override entrypoint to run the proxy server
+entrypoint: node proxy_server.js
+
+env_variables:
+  NODE_ENV: "production"
+  TARGET_URL: "http://34.31.213.200:8080"
+
+automatic_scaling:
+  min_instances: 1
+  max_instances: 1
+  target_cpu_utilization: 0.65
+
+handlers:
+  - url: /.*
+    script: auto
+    secure: always
