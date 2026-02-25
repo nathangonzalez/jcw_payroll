@@ -1,0 +1,26 @@
+[Unit]
+Description=JCW Labor Timekeeper
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nathan
+Group=nathan
+WorkingDirectory=/home/nathan/dev/repos/jcw_payroll/labor-timekeeper
+EnvironmentFile=/home/nathan/dev/repos/jcw_payroll/labor-timekeeper/.env.prod
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=labor-timekeeper
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/home/nathan/dev/repos/jcw_payroll/labor-timekeeper/data
+ReadWritePaths=/tmp
+
+[Install]
+WantedBy=multi-user.target
