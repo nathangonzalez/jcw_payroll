@@ -97,6 +97,15 @@ if (process.env.NODE_ENV !== 'production') {
 // ── Hardened cold-start restore: retry + snapshot fallback + verification ──
 let _restoreOk = false;
 if (process.env.NODE_ENV === 'production') {
+  // VM persistent storage: skip cloud restore if local DB already has data.
+  // On App Engine /tmp is ephemeral so localEntries will always be 0 → restore runs.
+  // On a VM with persistent disk, the DB survives restarts → no re-download needed.
+  const localEntries = verifyDbEntries(DB_PATH);
+  if (localEntries > 0 || process.env.SKIP_CLOUD_RESTORE === '1') {
+    console.log(`[startup] Local DB has ${localEntries} entries — skipping cloud restore`);
+    _restoreOk = true;
+  }
+
   // Layer 1: Try main backup with retries
   for (let attempt = 1; attempt <= 3 && !_restoreOk; attempt++) {
     try {
