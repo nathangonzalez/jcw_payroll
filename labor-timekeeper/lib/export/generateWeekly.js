@@ -223,6 +223,16 @@ export async function generateWeeklyExports({ db, weekStart }) {
         idx += 1;
         if (applyLunch) lunchApplied = true;
 
+        // Day subtotal row (after last work entry for this day)
+        if (idx === workEntries.length) {
+          const daySubRow = ws.addRow(["", "", "", "", "", "", "", "", "", "", "", ""]);
+          daySubRow.getCell(1).value = dayNum;
+          daySubRow.getCell(1).font = { bold: true };
+          daySubRow.getCell(6).value = { formula: `SUM(F${ws.rowCount - workEntries.length}:F${ws.rowCount - 1})` };
+          daySubRow.getCell(6).font = { bold: true };
+          daySubRow.getCell(6).border = { top: { style: 'thin' }, bottom: { style: 'thin' } };
+        }
+
         const total = round2(hours * rate);
 
         const summaryName = clientName === "PTO" ? "PTO " : clientName;
