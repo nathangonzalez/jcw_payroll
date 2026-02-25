@@ -68,7 +68,10 @@ export function generatePrintableReport({ db, weekStart }) {
   .summary-total td { border-top: 3px double #333; font-weight: bold; }
   .currency::before { content: '$'; }
 </style></head><body>
-<button class="no-print" onclick="window.print()">🖨️ Print All Timesheets</button>\n`;
+<button class="no-print" onclick="window.print()">🖨️ Print All Timesheets</button>
+<div style="text-align:center; margin:8px 0;" class="no-print">
+  <img src="/icon-192.png" alt="JCW" style="height:40px; opacity:0.8;" />
+</div>\n`;
 
   for (const [empId, emp] of byEmployee) {
     const category = getEmployeeCategory(emp.name);
