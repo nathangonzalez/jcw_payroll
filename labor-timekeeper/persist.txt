@@ -1,105 +1,25 @@
-# ⚠️ DEPRECATED — See MEMORY.md at repo root for the canonical long-term memory.
-# This file is kept for reference but is no longer the primary source of truth.
-# JCW Labor Timekeeper - Session Persistence
-# Last updated: February 22, 2026 (deprecated 2/22/2026)
+# Labor Timekeeper — Persist State
+# Last updated: 2026-02-26 12:49 PM EST
 
-## PROJECT OVERVIEW
-Construction crew time tracking PWA with voice input and payroll export.
-- Employee time entry with voice notes (OpenAI Whisper)
-- Admin approval workflow (PIN: 7707)
-- Weekly and Monthly XLSX payroll exports
-- Cloud backup to Google Cloud Storage every 5 min
-- Email notifications on submit/export (via smtp-relay.gmail.com)
+## Production State
+- **VM URL**: https://jcw.nathangonzalez.dev (latest code, admin delete fix)
+- **App Engine URL**: https://labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com (old: jcw13)
+- **Branch**: fix/payroll-weeks
+- **Latest commit**: 6d64e82 — admin force-delete fix
+- **VM DB**: 96 customers, 8 employees, 45 entries (43 archived + 2 active)
 
-## PRODUCTION DEPLOYMENT
-- **Production URL:** https://labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com
-- **Current version:** jcw13 (deployed 2026-02-22, TRAFFIC_SPLIT=1.00)
-- **Project:** jcw-2-android-estimator
-- **Region:** us-central1
-- **Runtime:** nodejs22 on App Engine Standard (F1)
-- **Database:** SQLite at /tmp/app.db (ephemeral, restored from GCS on cold start)
-- **Bucket:** gs://jcw-labor-timekeeper
-- **Scaling:** min_instances=1, max_instances=1
+## Today's Session Summary (2/26)
+1. CI/CD pipeline fixed (Node 22, Playwright, HUSKY=0, port fix)
+2. Employee weekly summary panel built (app.html)
+3. Billing print preview + Print Billing button added to admin
+4. Admin force-delete fix (skip employee_id when admin+force)
+5. Fix delete/edit for SUBMITTED entries
+6. Deleted Phil Henderson's orphaned comment
+7. Agent suite architecture plan designed (7 sub-agents, ~$0.80/day)
 
-## CURRENT DATA STATE (as of 2/22/2026)
-- **285 time entries** (real production data weeks 1/28 through 2/22)
-- **93 customers** (from seed + reconciliation additions)
-- **8 employees:** Boban Abbate, Doug Kinsey, Jason Green, Phil Henderson, Sean Matthew, Thomas Brinson, Chris Jacobi (admin), Chris Zavesky (admin)
-- GCS backup verified: 285 entries, 93 customers
-
-## CHANGES MADE 2/22/2026
-
-### Admin Delete Fix
-- DELETE /api/time-entries/:id now allows admin force-delete WITHOUT requiring employee_id
-- When x-admin-secret header matches AND ?force=true, skips employee ownership check
-
-### New Endpoints
-- POST /api/admin/force-backup — triggers immediate GCS backup
-- GET /api/admin/all-entries — returns ALL entries for a week (DRAFT, SUBMITTED, APPROVED)
-
-### Admin UI: "All Entries" Button
-- Purple "All Entries" button next to "Approve Selected"
-- Shows table with Date, Employee, Customer, Hours, Status (color-coded), Delete button
-- Status badges: green=APPROVED, orange=SUBMITTED, gray=DRAFT
-
-### Slack Bot (Clawdbot)
-- Bot running on VM (clawbot-ops) via Socket Mode
-- /claw slash command works
-- Channel messages work in #jcw_bot (open chat mode)
-- DMs work
-- Approval buttons: events reach bot, simplified handler (no openclaw call on approve)
-- NoneType .strip() bug fixed in run_codex
-- Orphan approval handler added (handles cards from external scripts)
-- Known issue: approve handler still has NoneType error on some paths — needs investigation
-
-### Known Issues
-- restore-latest endpoint doesn't work on cold start (daily snapshots have 0 entries)
-- Workaround: use restore-latest-merge after every deploy
-- Slack bot approval buttons sometimes produce NoneType errors
-- Bot process dies between restarts — needs scheduled task
-
-## DEPLOY COMMANDS
-```powershell
-cd c:\Users\natha\dev\repos\jcw_payroll\labor-timekeeper
-
-# Deploy new version WITHOUT promoting (safe):
-gcloud app deploy --no-promote --version=jcwN --quiet
-
-# Promote:
-gcloud app deploy --version=jcwN --promote --quiet
-
-# After promotion, restore data:
-curl.exe -s -X POST "https://labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com/api/admin/restore-latest-merge" -d "{}"
-
-# Force backup:
-curl.exe -s -X POST "https://...appspot.com/api/admin/force-backup" -H "Content-Type: application/json" -d "{}"
-```
-
-## API ENDPOINTS (key ones)
-- POST /api/time-entries — Create/update time entry
-- DELETE /api/time-entries/:id — Delete entry (admin: ?force=true, no employee_id needed)
-- POST /api/submit-week — Submit week (DRAFT → SUBMITTED)
-- GET /api/approvals?week_start=YYYY-MM-DD — Get pending entries
-- GET /api/admin/all-entries?week_start=YYYY-MM-DD — Get ALL entries (any status)
-- POST /api/approve — Approve entries {ids: [...]}
-- POST /api/admin/force-backup — Trigger immediate GCS backup
-- POST /api/admin/restore-latest-merge — Restore from GCS (merge into running DB)
-- GET /api/health — Health check with DB stats
-
-## SLACK BOT
-- Bot: jcw_service (Slack app)
-- Channel: #jcw_bot (C0AFSUEJ2KY)
-- User: U0AFUDCUPUJ (Nathan)
-- Secrets: agent-ops/Slack/sc_manager.txt
-- Start: agent-ops/scripts/run_slack_bot.ps1
-- VM service: clawbot.service on clawbot-ops
-- Scopes: chat:write, app_mentions:read, im:history, assistant:write, commands, channels:history, groups:history
-
-## NEXT UP
-- Fix Slack approval button NoneType error completely
-- Add payroll-specific Slack commands
-- Set up scheduled task for bot auto-restart
-- Continue reconciliation work (Week 1-3 vs PDF source of truth)
-- Timesheet formatting fixes (borders, spacing, alignment)
-- Billing module logic parity story
-- Suite shell development
+## Pending
+- App Engine deploy with latest code (needs Nathan approval)
+- Nathan's Slack relay prompt (couldn't read from this session)
+- Agent suite implementation (Phase 1: orchestrator + task queue)
+- Merge PR #4 once CI passes
+- Close PR #2 (stale)
