@@ -734,7 +734,8 @@ app.post("/api/time-entries", (req, res) => {
 app.delete('/api/time-entries/:id', (req, res) => {
   try {
     const teId = req.params.id;
-    const isAdmin = req.headers['x-admin-secret'] === (process.env.ADMIN_PIN || '7707');
+    const adminSecret = process.env.ADMIN_SECRET;
+    const isAdmin = adminSecret && req.headers['x-admin-secret'] === adminSecret;
     const forceDelete = req.query.force === 'true' || req.body?.force === true;
 
     const entry = db.prepare('SELECT id, employee_id, status FROM time_entries WHERE id = ?').get(teId);
