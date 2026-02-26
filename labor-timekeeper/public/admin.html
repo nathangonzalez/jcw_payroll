@@ -441,14 +441,20 @@ async function previewReconcile() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ month, confirm: false })
     });
+    if (!result || result.entries === undefined) {
+      showPipelineResult(`⚠️ No data to reconcile for ${month}.\nAll entries may already be archived.`);
+      return;
+    }
     const output = [
       `📋 Reconciliation Preview for ${month}`,
       ``,
       `Entries to archive: ${result.entries}`,
       `Total Hours: ${result.totalHours}`,
-      `Total Billed: $${result.totalBilled}`,
+      `Total Billed: $${Number(result.totalBilled || 0).toFixed(2)}`,
       ``,
-      `Click "Reconcile & Clear" to archive and remove this data.`
+      result.entries > 0
+        ? `Click "Reconcile & Clear" to archive and remove this data.`
+        : `✅ Nothing to reconcile — all entries are already archived.`
     ].join('\n');
     showPipelineResult(output);
   } catch (err) {
@@ -470,16 +476,9 @@ async function closeMonth() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ month, confirm: true })
     });
-    const output = [
-      `✅ Payroll Reconciled for ${month}`,
-      ``,
-      `Archived: ${result.archived} entries`,
-      `Total Hours: ${result.summary.totalHours}`,
-      `Total Billed: $${result.summary.totalBilled}`,
-      ``,
-      `Data has been archived and cleared from active database.`
-    ].join('\n');
-    showPipelineResult(output);
+    // Silent success - just clear the preview
+    el('pipelineResult').style.display = 'none';
+    if (el('reportPreview')) el('reportPreview').style.display = 'none';
   } catch (err) {
     showPipelineResult(`❌ Error: ${err.message}`);
   }
