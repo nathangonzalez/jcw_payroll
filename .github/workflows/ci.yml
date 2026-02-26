@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - name: Install dependencies (labor-timekeeper)
+        run: |
+          cd labor-timekeeper
+          npm ci
+
+      - name: Run tests (labor-timekeeper)
+        run: |
+          cd labor-timekeeper
+          npm test
+
+      - name: Build Docker image (labor-timekeeper)
+        run: |
+          cd labor-timekeeper
+          docker build -t labor-timekeeper-app .
