@@ -14,7 +14,7 @@ const { test, expect } = require('@playwright/test');
  *  7. Print layout verification
  */
 
-const BASE_URL = process.env.TEST_URL || 'http://localhost:8080';
+const BASE_URL = process.env.TEST_URL || 'http://localhost:3000';
 const ADMIN_SECRET = process.env.ADMIN_SECRET || '7707';
 
 // ============================================================

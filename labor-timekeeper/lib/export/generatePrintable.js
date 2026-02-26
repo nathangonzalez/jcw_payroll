@@ -4,7 +4,7 @@
  * Designed for one-click printing with proper page breaks.
  */
 
-import { getBillRate } from "../billing.js";
+import { getBillRate, getClientBillRate } from "../billing.js";
 import { getEmployeeCategory, splitEntriesWithOT, calculatePayWithOT } from "../classification.js";
 import { weekDates, weekStartYMD, ymdToDate } from "../time.js";
 
@@ -13,9 +13,10 @@ import { weekDates, weekStartYMD, ymdToDate } from "../time.js";
  * @param {Object} options
  * @param {Database} options.db
  * @param {string} options.weekStart - YYYY-MM-DD
+ * @param {boolean} [options.billingMode=false] - Use client billing rates instead of payroll rates
  * @returns {string} HTML string
  */
-export function generatePrintableReport({ db, weekStart }) {
+export function generatePrintableReport({ db, weekStart, billingMode = false }) {
   const normalizedWeekStart = weekStartYMD(ymdToDate(weekStart));
   const { ordered } = weekDates(normalizedWeekStart);
   const weekStartYmd = ordered[0].ymd;
@@ -40,9 +41,14 @@ export function generatePrintableReport({ db, weekStart }) {
     byEmployee.get(row.employee_id).entries.push(row);
   }
 
+  const reportType = billingMode ? 'Billing' : 'Payroll';
+  const rateFunc = billingMode
+    ? (empId, custId) => getClientBillRate(db, empId, custId)
+    : (empId, custId) => getBillRate(db, empId, custId);
+
   const weekLabel = `${fmtDate(weekStartYmd)} - ${fmtDate(weekEnd)}`;
   let html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-<title>Payroll Report — ${weekLabel}</title>
+<title>${reportType} Report — ${weekLabel}</title>
 <style>
   @page { size: landscape; margin: 0.4in; }
   @media print { .page-break { page-break-after: always; } .no-print { display: none !important; } }
@@ -75,7 +81,7 @@ export function generatePrintableReport({ db, weekStart }) {
 
   for (const [empId, emp] of byEmployee) {
     const category = getEmployeeCategory(emp.name);
-    const rate = emp.entries.length > 0 ? getBillRate(db, emp.entries[0].employee_id, emp.entries[0].customer_id) : 0;
+    const rate = emp.entries.length > 0 ? rateFunc(emp.entries[0].employee_id, emp.entries[0].customer_id) : 0;
 
     // Group entries by date
     const byDate = new Map();
@@ -90,7 +96,7 @@ export function generatePrintableReport({ db, weekStart }) {
     for (const e of emp.entries) {
       if (isLunch(e)) continue;
       const key = e.customer_name;
-      if (!clientSummary.has(key)) clientSummary.set(key, { hours: 0, rate: getBillRate(db, e.employee_id, e.customer_id) });
+      if (!clientSummary.has(key)) clientSummary.set(key, { hours: 0, rate: rateFunc(e.employee_id, e.customer_id) });
       clientSummary.get(key).hours += Number(e.hours || 0);
       totalWorkHours += Number(e.hours || 0);
     }

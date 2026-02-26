@@ -60,12 +60,12 @@ function getDefaultAdminWeekStart(db) {
   const prevEnd = prevRange.ordered[6]?.ymd || prevWeekStart;
   const currentCount = db.prepare(`
     SELECT COUNT(*) as c FROM time_entries
-    WHERE work_date >= ? AND work_date <= ? AND status = 'SUBMITTED'
+    WHERE work_date >= ? AND work_date <= ? AND status = 'SUBMITTED' AND archived = 0
   `).get(currentStart, currentEnd)?.c || 0;
   if (currentCount > 0) return currentWeekStart;
   const prevCount = db.prepare(`
     SELECT COUNT(*) as c FROM time_entries
-    WHERE work_date >= ? AND work_date <= ? AND status = 'SUBMITTED'
+    WHERE work_date >= ? AND work_date <= ? AND status = 'SUBMITTED' AND archived = 0
   `).get(prevStart, prevEnd)?.c || 0;
   if (prevCount > 0) return prevWeekStart;
   return currentWeekStart;
@@ -190,6 +190,36 @@ app.use(helmet({ contentSecurityPolicy: false })); // allow inline scripts in MV
 app.use(morgan("dev"));
 app.use(express.json({ limit: "2mb" }));
 app.use(express.static(PUBLIC_DIR));
+
+// Setup basic crash email alerting
+process.on('uncaughtException', async (err) => {
+  console.error('[FATAL] Uncaught Exception:', err);
+  try {
+    const to = process.env.EMAIL_TO || 'nathan@jcwelton.com';
+    await sendEmail({
+      to,
+      subject: '🚨 URGENT: Labor Timekeeper App Crash',
+      text: `The Labor Timekeeper app has crashed due to an uncaught exception.\n\nError: ${err.message}\n\nStack:\n${err.stack}`
+    });
+  } catch (emailErr) {
+    console.error('[FATAL] Failed to send crash email:', emailErr);
+  }
+  process.exit(1);
+});
+
+process.on('unhandledRejection', async (reason, promise) => {
+  console.error('[FATAL] Unhandled Rejection at:', promise, 'reason:', reason);
+  try {
+    const to = process.env.EMAIL_TO || 'nathan@jcwelton.com';
+    await sendEmail({
+      to,
+      subject: '🚨 URGENT: Labor Timekeeper App Crash (Unhandled Rejection)',
+      text: `The Labor Timekeeper app has crashed due to an unhandled rejection.\n\nReason: ${reason}`
+    });
+  } catch (emailErr) {
+    console.error('[FATAL] Failed to send crash email:', emailErr);
+  }
+});
 // Serve generated exports for download links
 app.use('/exports', express.static(EXPORT_DIR));
 
@@ -482,7 +512,7 @@ app.get('/api/admin/list-test-entries', (req, res) => {
       FROM time_entries te
       JOIN customers c ON c.id = te.customer_id
       JOIN employees e ON e.id = te.employee_id
-      WHERE lower(c.name) LIKE '%api%' OR lower(c.name) LIKE '%test%' OR lower(c.name) LIKE '%placeholder%'
+      WHERE (lower(c.name) LIKE '%api%' OR lower(c.name) LIKE '%test%' OR lower(c.name) LIKE '%placeholder%') AND te.archived = 0
       ORDER BY te.work_date ASC
     `).all();
     res.json({ ok: true, count: rows.length, rows });
@@ -559,7 +589,7 @@ app.get('/api/admin/list-recent-entries', (req, res) => {
       FROM time_entries te
       JOIN employees e ON e.id = te.employee_id
       JOIN customers c ON c.id = te.customer_id
-      WHERE te.created_at >= ?
+      WHERE te.created_at >= ? AND te.archived = 0
       ORDER BY te.created_at DESC
     `).all(sinceIso);
     res.json({ ok: true, count: rows.length, rows });
@@ -573,9 +603,36 @@ app.get("/api/payroll-weeks", (req, res) => {
   try {
     const today = todayYMD();
     const currentMonth = today.slice(0, 7); // YYYY-MM
-    const month = String(req.query.month || currentMonth);
-    const weeks = payrollWeeksForMonth(month);
-    const currentWeek = weekStartYMD(new Date());
+    let month = String(req.query.month || currentMonth);
+    let weeks = payrollWeeksForMonth(month) || [];
+
+    // If no payroll weeks defined for requested/current month, try next month so UI can advance after close
+    if (!weeks.length) {
+      const [y, m] = month.split('-').map(Number);
+      const nextMonth = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+      const nextWeeks = payrollWeeksForMonth(nextMonth) || [];
+      if (nextWeeks.length) {
+        month = nextMonth;
+        weeks = nextWeeks;
+      }
+    }
+
+    // Determine sensible currentWeek:
+    // - prefer the week that contains today if present
+    // - else prefer the first future week (>= today)
+    // - else fall back to the most recent available week
+    let currentWeek = weekStartYMD(new Date());
+    if (weeks.length) {
+      if (weeks.includes(currentWeek)) {
+        // keep currentWeek as-is
+      } else {
+        // find first week >= currentWeek (string YYYY-MM-DD compares lexicographically)
+        const future = weeks.find(w => w >= currentWeek);
+        if (future) currentWeek = future;
+        else currentWeek = weeks[weeks.length - 1];
+      }
+    }
+
     res.json({ month, weeks, currentWeek });
   } catch (err) {
     console.error("payroll-weeks error:", err);
@@ -608,7 +665,7 @@ app.get("/api/time-entries", (req, res) => {
     FROM time_entries te
     JOIN customers c ON c.id = te.customer_id
     WHERE te.employee_id = ?
-      AND te.work_date >= ? AND te.work_date <= ?
+      AND te.work_date >= ? AND te.work_date <= ? AND te.archived = 0
     ORDER BY te.work_date ASC, te.start_time ASC, te.created_at ASC
   `).all(employeeId, start, end);
 
@@ -652,11 +709,13 @@ app.post("/api/time-entries", (req, res) => {
     if (existing.status === "APPROVED") {
       return res.status(409).json({ error: "Entry is locked (approved)" });
     }
+    // Editing a SUBMITTED entry reverts it to DRAFT so admin knows it needs re-approval
+    const newStatus = existing.status === 'SUBMITTED' ? 'DRAFT' : existing.status;
     db.prepare(`
       UPDATE time_entries
-      SET customer_id = ?, work_date = ?, hours = ?, start_time = ?, end_time = ?, notes = ?, updated_at = ?
+      SET customer_id = ?, work_date = ?, hours = ?, start_time = ?, end_time = ?, notes = ?, status = ?, updated_at = ?
       WHERE id = ?
-    `).run(customer_id, work_date, resolvedHours, resolvedStart, resolvedEnd, String(notes || ""), now, entryId);
+    `).run(customer_id, work_date, resolvedHours, resolvedStart, resolvedEnd, String(notes || ""), newStatus, now, entryId);
   } else {
     db.prepare(`
       INSERT INTO time_entries
@@ -691,7 +750,7 @@ app.delete('/api/time-entries/:id', (req, res) => {
     const employeeId = req.body?.employee_id || req.query.employee_id;
     if (!employeeId) return res.status(400).json({ error: 'employee_id required' });
     if (entry.employee_id !== employeeId) return res.status(403).json({ error: 'not authorized to delete this entry' });
-    if (entry.status && entry.status !== 'DRAFT') return res.status(409).json({ error: 'only DRAFT entries can be deleted (use ?force=true with admin)' });
+    if (entry.status && entry.status !== 'DRAFT' && entry.status !== 'SUBMITTED') return res.status(409).json({ error: 'only DRAFT and SUBMITTED entries can be deleted by employees (APPROVED entries require admin)' });
 
     const r = db.prepare('DELETE FROM time_entries WHERE id = ?').run(teId);
     res.json({ ok: true, deleted: r.changes || 0 });
@@ -782,7 +841,7 @@ Comment: ${typeof comment === 'string' ? comment.trim() : ''}
 View admin approvals: ${process.env.BASE_URL || 'http://localhost:3000'}/admin
 `;
       const to = process.env.EMAIL_TO || 'nathan@jcwelton.com';
-      await sendEmail({ to, subject, text });
+      await sendEmail({ to, cc: 'projects@jcwelton.com', subject, text });
     } catch (err) {
       console.warn('[email] Failed to send submit-week notification', err?.message || err);
     }
@@ -868,7 +927,7 @@ app.get("/api/admin/weeks", (req, res) => {
   const rows = db.prepare(`
     SELECT DISTINCT work_date
     FROM time_entries
-    WHERE work_date >= ? AND work_date <= ?
+    WHERE work_date >= ? AND work_date <= ? AND archived = 0
     ORDER BY work_date DESC
   `).all(start, end);
   const weeks = new Set();
@@ -923,7 +982,7 @@ app.get("/api/admin/all-entries", (req, res) => {
     FROM time_entries te
     JOIN employees e ON e.id = te.employee_id
     JOIN customers c ON c.id = te.customer_id
-    WHERE te.work_date >= ? AND te.work_date <= ?
+    WHERE te.work_date >= ? AND te.work_date <= ? AND te.archived = 0
     ORDER BY te.work_date ASC, e.name ASC
   `).all(start, end);
 
@@ -952,7 +1011,7 @@ app.get("/api/admin/report-preview", (req, res) => {
       JOIN employees e ON e.id = te.employee_id
       JOIN customers c ON c.id = te.customer_id
       WHERE te.work_date >= ? AND te.work_date <= ?
-        AND te.status = 'APPROVED'
+        AND te.status = 'APPROVED' AND te.archived = 0
       ORDER BY te.work_date ASC, e.name ASC
     `).all(rangeStart, rangeEnd);
 
@@ -1136,6 +1195,25 @@ app.get("/api/admin/print-week", (req, res) => {
   }
 });
 
+/**
+ * Billing Print Preview - same format as print-week but with client billing rates
+ * GET /api/admin/print-week-billing?week_start=YYYY-MM-DD
+ */
+app.get("/api/admin/print-week-billing", (req, res) => {
+  try {
+    const weekStart = String(req.query.week_start || '');
+    if (!weekStart) {
+      return res.status(400).json({ error: "week_start parameter required" });
+    }
+    const html = generatePrintableReport({ db, weekStart, billingMode: true });
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(html);
+  } catch (err) {
+    console.error("[print-week-billing]", err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
 /** ============================================================
  *  Option A - Functional XLSX Pipeline Endpoints
  *  ============================================================ */
@@ -1233,19 +1311,20 @@ app.post("/api/admin/close-month", async (req, res) => {
       WHERE work_date >= ? AND work_date < ?
     `).get(monthStart, nextMonth);
 
-    // Delete entries
+    // Archive entries instead of deleting
     const result = db.prepare(`
-      DELETE FROM time_entries
+      UPDATE time_entries
+      SET archived = 1, updated_at = ?
       WHERE work_date >= ? AND work_date < ?
-    `).run(monthStart, nextMonth);
+    `).run(new Date().toISOString(), monthStart, nextMonth);
 
-    console.log(`[close-month] Deleted ${result.changes} entries for ${month}`);
+    console.log(`[close-month] Archived ${result.changes} entries for ${month}`);
 
     res.json({
       ok: true,
       month,
       deletedCount: result.changes,
-      message: `Closed month ${month}: ${result.changes} entries deleted`,
+      message: `Closed month ${month}: ${result.changes} entries archived`,
     });
   } catch (err) {
     console.error("[close-month]", err);
@@ -2118,19 +2197,28 @@ app.post("/api/admin/reconcile", async (req, res) => {
     })();
 
     // Get preview of what will be archived (using payroll month range)
+    // To ensure exact matching to the preview shown, we do a 2-step process:
+    // 1. Fetch all candidate entries in the broad date range
     const allEntries = db.prepare(`
       SELECT te.*, e.default_bill_rate,
         COALESCE(ro.bill_rate, e.default_bill_rate) as eff_rate
       FROM time_entries te
       JOIN employees e ON e.id = te.employee_id
       LEFT JOIN rate_overrides ro ON ro.employee_id = te.employee_id AND ro.customer_id = te.customer_id
-      WHERE te.work_date >= ? AND te.work_date <= ?
+      WHERE te.work_date >= ? AND te.work_date <= ? AND te.archived = 0
     `).all(rangeStart, rangeEnd);
-    // Filter to only entries in valid payroll weeks
-    const filtered = allEntries.filter(r => {
+    
+    // 2. Filter strictly by whether the entry's date falls into the weeks for this month
+    const validEntryIds = [];
+    const filtered = [];
+    for (const r of allEntries) {
       const ws = weekStartYMD(ymdToDate(r.work_date));
-      return weekSet.has(ws);
-    });
+      if (weekSet.has(ws)) {
+        filtered.push(r);
+        validEntryIds.push(r.id);
+      }
+    }
+    
     const preview = {
       count: filtered.length,
       totalHours: filtered.reduce((s, r) => s + Number(r.hours || 0), 0),
@@ -2146,18 +2234,29 @@ app.post("/api/admin/reconcile", async (req, res) => {
         entries: preview.count || 0,
         totalHours: preview.totalHours || 0,
         totalBilled: Math.round((preview.totalBilled || 0) * 100) / 100,
-        message: "Send confirm: true to archive and clear this data"
+        message: "Send confirm: true to archive this data"
       });
     }
     
-    // Archive and clear
-    const result = await archiveAndClearPayroll(db, month);
+    // Set archived = 1 exactly for the valid ids
+    let archivedCount = 0;
+    if (validEntryIds.length > 0) {
+      const nowTs = new Date().toISOString();
+      const stmt = db.prepare('UPDATE time_entries SET archived = 1, updated_at = ? WHERE id = ?');
+      const tx = db.transaction(() => {
+        for (const id of validEntryIds) {
+          stmt.run(nowTs, id);
+          archivedCount++;
+        }
+      });
+      tx();
+    }
     
     res.json({
       ok: true,
       reconciled: true,
-      ...result,
-      message: `Archived and cleared ${result.cleared} entries for ${month}`
+      cleared: archivedCount,
+      message: `Archived ${archivedCount} entries for ${month}`
     });
   } catch (err) {
     console.error("[admin/reconcile]", err);
