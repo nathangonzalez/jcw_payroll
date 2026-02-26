@@ -709,11 +709,13 @@ app.post("/api/time-entries", (req, res) => {
     if (existing.status === "APPROVED") {
       return res.status(409).json({ error: "Entry is locked (approved)" });
     }
+    // Editing a SUBMITTED entry reverts it to DRAFT so admin knows it needs re-approval
+    const newStatus = existing.status === 'SUBMITTED' ? 'DRAFT' : existing.status;
     db.prepare(`
       UPDATE time_entries
-      SET customer_id = ?, work_date = ?, hours = ?, start_time = ?, end_time = ?, notes = ?, updated_at = ?
+      SET customer_id = ?, work_date = ?, hours = ?, start_time = ?, end_time = ?, notes = ?, status = ?, updated_at = ?
       WHERE id = ?
-    `).run(customer_id, work_date, resolvedHours, resolvedStart, resolvedEnd, String(notes || ""), now, entryId);
+    `).run(customer_id, work_date, resolvedHours, resolvedStart, resolvedEnd, String(notes || ""), newStatus, now, entryId);
   } else {
     db.prepare(`
       INSERT INTO time_entries
@@ -748,7 +750,7 @@ app.delete('/api/time-entries/:id', (req, res) => {
     const employeeId = req.body?.employee_id || req.query.employee_id;
     if (!employeeId) return res.status(400).json({ error: 'employee_id required' });
     if (entry.employee_id !== employeeId) return res.status(403).json({ error: 'not authorized to delete this entry' });
-    if (entry.status && entry.status !== 'DRAFT') return res.status(409).json({ error: 'only DRAFT entries can be deleted (use ?force=true with admin)' });
+    if (entry.status && entry.status !== 'DRAFT' && entry.status !== 'SUBMITTED') return res.status(409).json({ error: 'only DRAFT and SUBMITTED entries can be deleted by employees (APPROVED entries require admin)' });
 
     const r = db.prepare('DELETE FROM time_entries WHERE id = ?').run(teId);
     res.json({ ok: true, deleted: r.changes || 0 });

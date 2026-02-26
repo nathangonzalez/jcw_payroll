@@ -9,7 +9,7 @@ console.log('Tables:', tables.map(t => t.name).join(', '));
 const empCount = db.prepare('SELECT COUNT(*) as n FROM employees').get();
 console.log('Employees:', empCount.n);
 
-const custCount = db.prepare('SELECT COUNT(*) as n FROM customers').get();
+const custsCount = db.prepare('SELECT COUNT(*) as n FROM customers').get();
 console.log('Customers:', custCount.n);
 
 const byStatus = db.prepare('SELECT status, COUNT(*) as n, SUM(hours) as hours FROM time_entries GROUP BY status').all();

@@ -121,6 +121,7 @@ CREATE TABLE IF NOT EXISTS time_entries (
   end_time TEXT NOT NULL DEFAULT '',
   notes TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'DRAFT', -- DRAFT | SUBMITTED | APPROVED
+  archived INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   FOREIGN KEY(employee_id) REFERENCES employees(id),
@@ -141,6 +142,18 @@ CREATE TABLE IF NOT EXISTS weekly_comments (
 CREATE INDEX IF NOT EXISTS idx_time_entries_emp_date ON time_entries(employee_id, work_date);
 CREATE INDEX IF NOT EXISTS idx_time_entries_cust_date ON time_entries(customer_id, work_date);
   `);
+
+  // Migration: add archived column if it doesn't exist
+  try {
+    const teCols = db.prepare("PRAGMA table_info(time_entries)").all();
+    const hasArchived = teCols.some(c => c.name === 'archived');
+    if (!hasArchived) {
+      db.exec("ALTER TABLE time_entries ADD COLUMN archived INTEGER NOT NULL DEFAULT 0");
+      console.log('[migrate] Added archived column to time_entries table');
+    }
+  } catch (err) {
+    console.warn('[migrate] failed to add archived column', err?.message || err);
+  }
 }
 
 export function id(prefix = "") {
