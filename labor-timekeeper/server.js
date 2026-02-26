@@ -1193,6 +1193,25 @@ app.get("/api/admin/print-week", (req, res) => {
   }
 });
 
+/**
+ * Billing Print Preview - same format as print-week but with client billing rates
+ * GET /api/admin/print-week-billing?week_start=YYYY-MM-DD
+ */
+app.get("/api/admin/print-week-billing", (req, res) => {
+  try {
+    const weekStart = String(req.query.week_start || '');
+    if (!weekStart) {
+      return res.status(400).json({ error: "week_start parameter required" });
+    }
+    const html = generatePrintableReport({ db, weekStart, billingMode: true });
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.send(html);
+  } catch (err) {
+    console.error("[print-week-billing]", err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
+
 /** ============================================================
  *  Option A - Functional XLSX Pipeline Endpoints
  *  ============================================================ */
