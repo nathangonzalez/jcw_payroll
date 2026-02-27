@@ -272,12 +272,16 @@ async function init(){
   el('previewReconcileBtn').onclick = previewReconcile;
   el('closeMonthBtn').onclick = closeMonth;
 
-  // Default month values
-  const now = new Date();
-  const ym = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
-  CURRENT_MONTH = ym;
-  el('reportMonthLabel').textContent = ym;
-  el('closeMonth').value = ym;
+  // Default month: detect from payroll-weeks API (payroll month, not calendar month)
+  try {
+    const pw = await api('/api/payroll-weeks?_=' + Date.now());
+    CURRENT_MONTH = pw.month || `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
+  } catch (e) {
+    const now = new Date();
+    CURRENT_MONTH = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  }
+  el('reportMonthLabel').textContent = CURRENT_MONTH;
+  el('closeMonth').value = CURRENT_MONTH;
   buildMonthOptions(CURRENT_MONTH);
   if (el('loadMonthBtn')) {
     el('loadMonthBtn').onclick = async () => {
