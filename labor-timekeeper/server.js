@@ -603,7 +603,25 @@ app.get("/api/payroll-weeks", (req, res) => {
   try {
     const today = todayYMD();
     const currentMonth = today.slice(0, 7); // YYYY-MM
-    let month = String(req.query.month || currentMonth);
+    let currentWeek = weekStartYMD(new Date());
+
+    // If no explicit month requested, find the payroll month that contains today's week
+    let month = req.query.month ? String(req.query.month) : null;
+    if (!month) {
+      // Search payroll months to find the one containing today's week start
+      const [cy] = currentMonth.split('-').map(Number);
+      for (let m = 1; m <= 12; m++) {
+        const candidate = `${cy}-${String(m).padStart(2, '0')}`;
+        const candidateWeeks = payrollWeeksForMonth(candidate) || [];
+        if (candidateWeeks.includes(currentWeek)) {
+          month = candidate;
+          break;
+        }
+      }
+      // Fallback to calendar month if no payroll month matched
+      if (!month) month = currentMonth;
+    }
+
     let weeks = payrollWeeksForMonth(month) || [];
 
     // If no payroll weeks defined for requested/current month, try next month so UI can advance after close
@@ -621,12 +639,10 @@ app.get("/api/payroll-weeks", (req, res) => {
     // - prefer the week that contains today if present
     // - else prefer the first future week (>= today)
     // - else fall back to the most recent available week
-    let currentWeek = weekStartYMD(new Date());
     if (weeks.length) {
       if (weeks.includes(currentWeek)) {
         // keep currentWeek as-is
       } else {
-        // find first week >= currentWeek (string YYYY-MM-DD compares lexicographically)
         const future = weeks.find(w => w >= currentWeek);
         if (future) currentWeek = future;
         else currentWeek = weeks[weeks.length - 1];
