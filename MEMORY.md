@@ -150,6 +150,35 @@ PICK module → AUDIT code → SPIKE improvement → POST to Slack → WAIT for 
 
 ---
 
+## 🔲 Open Backlog (from Sprint Stories + Ops Hardening + Recovered Requirements)
+
+### Payroll (Sprint 3 & 4)
+- US-3.1: Monthly Breakdown SUMIF formula references
+- US-3.2: OT Premium auto-calculation
+- US-3.3: Email delivery verification
+- US-4.1: Automated weekly export cron
+- US-4.3: Duplicate entry prevention
+- Backup guard (empty DB edge case)
+- Reconcile/archive range mismatch
+- Archive summary billed totals
+- Observability metrics
+- Auto-save/Draft (localStorage)
+- Voice command applyParsed() flow
+- Export totals (hourlyAmount, adminAmount, grand total)
+- Monthly GRAND TOTAL row
+- Admin cleanup endpoints
+- PWA/service worker maintenance
+
+### Infrastructure
+- CI/CD pipeline: was triggering on ALL branches → spam (fixed trigger 3/1, tests still failing)
+- jcwelton.com main website: naked domain → old Squarespace hosting, needs update
+- Decommission App Engine (old payroll)
+- Office Server cloud backup (rclone → GCS)
+- Shared files migration → Google Drive
+- QuickBooks Online migration (Q2 2026)
+- Fix OpenClaw rate limit loop
+- Service user mismatch (nathan vs natha)
+
 ## ⚠️ Known Issues
 
 1. Voice command: `/tmp/uploads` permission issue — fixed with chmod 777 (2/27)
@@ -157,6 +186,8 @@ PICK module → AUDIT code → SPIKE improvement → POST to Slack → WAIT for 
 3. OpenClaw: rate-limited on Copilot, stuck in retry loop since ~2/21
 4. Slack bot: approval buttons sometimes produce NoneType errors
 5. App Engine: still running old payroll code — not decommissioned
+6. CI/CD workflow was on `**` branches → email spam (trigger fixed 3/1, tests still red)
+7. jcwelton.com naked domain still points to old hosting
 
 ---
 
