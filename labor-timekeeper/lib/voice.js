@@ -56,7 +56,7 @@ export async function parseVoiceCommand({ text, customers, referenceDate }) {
     "You extract structured time entries from short, messy voice commands.",
     "Return JSON that matches the schema exactly.",
     "Rules:",
-    "- Interpret weekday words (Mon/Tue/.../Friday/etc) as days in the CURRENT payroll week.",
+    "- Interpret weekday words (Mon/Tue/.../Friday/etc) as days in the CURRENT payroll week. The 'day' field MUST be one of: mon, tue, wed, thu, fri, sat, sun (3-letter lowercase).",
     `- Payroll week starts on ${weekStart}.`,
     `- Today (America/New_York) is ${nowYmd}.`,
     "- If day is omitted, assume the user means today.",
@@ -90,6 +90,23 @@ export async function parseVoiceCommand({ text, customers, referenceDate }) {
   } catch (e) {
     throw new Error("Failed to parse voice command response as JSON");
   }
+
+  // Normalize day values before Zod validation — GPT sometimes returns
+  // full names like "Friday" instead of the required "fri" short code.
+  const DAY_NORMALIZE = {
+    monday: "mon", tuesday: "tue", wednesday: "wed", thursday: "thu",
+    friday: "fri", saturday: "sat", sunday: "sun",
+    mon: "mon", tue: "tue", wed: "wed", thu: "thu",
+    fri: "fri", sat: "sat", sun: "sun"
+  };
+  if (Array.isArray(parsed?.entries)) {
+    for (const entry of parsed.entries) {
+      if (entry.day && typeof entry.day === "string") {
+        entry.day = DAY_NORMALIZE[entry.day.toLowerCase()] || entry.day;
+      }
+    }
+  }
+
   const safe = VoiceParseSchema.parse(parsed);
 
   // Resolve customer names robustly with Fuse, then map weekday->date.
