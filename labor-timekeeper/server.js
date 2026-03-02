@@ -1131,7 +1131,21 @@ app.get("/api/admin/report-preview", (req, res) => {
   }
 });
 
-/** Voice: upload audio -> transcribe -> parse -> return proposed entries */
+/** Voice: text-only parse (Web Speech API transcription done client-side) */
+app.post("/api/voice/parse", async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text || !text.trim()) return res.status(400).json({ error: "No text provided" });
+    const customers = db.prepare("SELECT id, name FROM customers ORDER BY name ASC").all();
+    const parsed = await parseVoiceCommand({ text: text.trim(), customers });
+    res.json({ ok: true, transcript: text.trim(), ...parsed });
+  } catch (err) {
+    console.error("Voice parse error:", err);
+    res.status(500).json({ error: err.message || "Parse failed" });
+  }
+});
+
+/** Voice: upload audio -> transcribe -> parse -> return proposed entries (legacy) */
 app.post("/api/voice/command", upload.single("audio"), async (req, res) => {
   try {
     const openai = getOpenAI();
