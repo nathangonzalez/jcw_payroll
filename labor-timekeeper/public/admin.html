@@ -73,7 +73,8 @@
       <div class="row" style="margin-top:12px; gap:8px;">
         <button id="genMonthBtn" class="primary">🛠️ Download Monthly XLSX</button>
         <button id="genBillingBtn" class="primary" style="background:#2d8a4e">💰 Download Billing Report</button>
-        <button onclick="printWeekTimesheets()" class="primary" style="background:#1a56db">🖨️ Print Week Timesheets</button>
+        <button onclick="printWeekTimesheets()" class="primary" style="background:#1a56db">🖨️ Print Payroll</button>
+        <button onclick="printWeekBilling()" class="primary" style="background:#0e7490">💰 Print Billing</button>
         <button id="previewMonthBtn" class="badge">📊 Preview Report</button>
       </div>
       <div id="devControls" style="display:none;">
@@ -271,12 +272,16 @@ async function init(){
   el('previewReconcileBtn').onclick = previewReconcile;
   el('closeMonthBtn').onclick = closeMonth;
 
-  // Default month values
-  const now = new Date();
-  const ym = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
-  CURRENT_MONTH = ym;
-  el('reportMonthLabel').textContent = ym;
-  el('closeMonth').value = ym;
+  // Default month: detect from payroll-weeks API (payroll month, not calendar month)
+  try {
+    const pw = await api('/api/payroll-weeks?_=' + Date.now());
+    CURRENT_MONTH = pw.month || `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
+  } catch (e) {
+    const now = new Date();
+    CURRENT_MONTH = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  }
+  el('reportMonthLabel').textContent = CURRENT_MONTH;
+  el('closeMonth').value = CURRENT_MONTH;
   buildMonthOptions(CURRENT_MONTH);
   if (el('loadMonthBtn')) {
     el('loadMonthBtn').onclick = async () => {
@@ -339,6 +344,12 @@ function printWeekTimesheets() {
   const weekStart = el('weekSelect')?.value || CURRENT_WEEK_START;
   if (!weekStart) { alert('Select a week first'); return; }
   window.open(`/api/admin/print-week?week_start=${encodeURIComponent(weekStart)}`, '_blank');
+}
+
+function printWeekBilling() {
+  const weekStart = el('weekSelect')?.value || CURRENT_WEEK_START;
+  if (!weekStart) { alert('Select a week first'); return; }
+  window.open(`/api/admin/print-week-billing?week_start=${encodeURIComponent(weekStart)}`, '_blank');
 }
 
 async function downloadBilling() {
@@ -441,14 +452,20 @@ async function previewReconcile() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ month, confirm: false })
     });
+    if (!result || result.entries === undefined) {
+      showPipelineResult(`⚠️ No data to reconcile for ${month}.\nAll entries may already be archived.`);
+      return;
+    }
     const output = [
       `📋 Reconciliation Preview for ${month}`,
       ``,
       `Entries to archive: ${result.entries}`,
       `Total Hours: ${result.totalHours}`,
-      `Total Billed: $${result.totalBilled}`,
+      `Total Billed: $${Number(result.totalBilled || 0).toFixed(2)}`,
       ``,
-      `Click "Reconcile & Clear" to archive and remove this data.`
+      result.entries > 0
+        ? `Click "Reconcile & Clear" to archive and remove this data.`
+        : `✅ Nothing to reconcile — all entries are already archived.`
     ].join('\n');
     showPipelineResult(output);
   } catch (err) {
@@ -470,16 +487,9 @@ async function closeMonth() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ month, confirm: true })
     });
-    const output = [
-      `✅ Payroll Reconciled for ${month}`,
-      ``,
-      `Archived: ${result.archived} entries`,
-      `Total Hours: ${result.summary.totalHours}`,
-      `Total Billed: $${result.summary.totalBilled}`,
-      ``,
-      `Data has been archived and cleared from active database.`
-    ].join('\n');
-    showPipelineResult(output);
+    // Silent success - just clear the preview
+    el('pipelineResult').style.display = 'none';
+    if (el('reportPreview')) el('reportPreview').style.display = 'none';
   } catch (err) {
     showPipelineResult(`❌ Error: ${err.message}`);
   }
