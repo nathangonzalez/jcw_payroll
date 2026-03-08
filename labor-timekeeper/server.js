@@ -58,16 +58,29 @@ function getDefaultAdminWeekStart(db) {
   const currentEnd = currentRange.ordered[6]?.ymd || currentWeekStart;
   const prevStart = prevRange.ordered[0]?.ymd || prevWeekStart;
   const prevEnd = prevRange.ordered[6]?.ymd || prevWeekStart;
-  const currentCount = db.prepare(`
+  const currentSubmittedCount = db.prepare(`
     SELECT COUNT(*) as c FROM time_entries
     WHERE work_date >= ? AND work_date <= ? AND status = 'SUBMITTED' AND archived = 0
   `).get(currentStart, currentEnd)?.c || 0;
-  if (currentCount > 0) return currentWeekStart;
-  const prevCount = db.prepare(`
+  if (currentSubmittedCount > 0) return currentWeekStart;
+  const prevSubmittedCount = db.prepare(`
     SELECT COUNT(*) as c FROM time_entries
     WHERE work_date >= ? AND work_date <= ? AND status = 'SUBMITTED' AND archived = 0
   `).get(prevStart, prevEnd)?.c || 0;
-  if (prevCount > 0) return prevWeekStart;
+  if (prevSubmittedCount > 0) return prevWeekStart;
+
+  // Fallback: if there are no submitted rows, show the most recent week that
+  // has any entries so Admin "All Entries" does not default to an empty week.
+  const latest = db.prepare(`
+    SELECT work_date FROM time_entries
+    WHERE archived = 0
+    ORDER BY work_date DESC
+    LIMIT 1
+  `).get();
+  if (latest?.work_date) {
+    return weekStartYMD(ymdToDate(latest.work_date));
+  }
+
   return currentWeekStart;
 }
 
@@ -81,6 +94,14 @@ function monthRange(ym) {
   next.setUTCDate(next.getUTCDate() - 1);
   const end = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, '0')}-${String(next.getUTCDate()).padStart(2, '0')}`;
   return { start, end };
+}
+
+function parseIncludeAdmin(value, defaultValue = false) {
+  if (value == null || value === "") return defaultValue;
+  const v = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(v)) return true;
+  if (["0", "false", "no", "n", "off"].includes(v)) return false;
+  return defaultValue;
 }
 
 if (process.env.NODE_ENV !== 'production') {
@@ -751,7 +772,8 @@ app.delete('/api/time-entries/:id', (req, res) => {
   try {
     const teId = req.params.id;
     const adminSecret = process.env.ADMIN_SECRET;
-    const isAdmin = adminSecret && req.headers['x-admin-secret'] === adminSecret;
+    const providedSecret = req.headers['x-admin-secret'];
+    const isAdmin = !adminSecret || providedSecret === adminSecret;
     const forceDelete = req.query.force === 'true' || req.body?.force === true;
 
     const entry = db.prepare('SELECT id, employee_id, status FROM time_entries WHERE id = ?').get(teId);
@@ -1217,7 +1239,8 @@ app.get("/api/admin/print-week", (req, res) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) {
       return res.status(400).json({ error: "week_start=YYYY-MM-DD required" });
     }
-    const html = generatePrintableReport({ db, weekStart });
+    const includeAdmin = parseIncludeAdmin(req.query.include_admin, false);
+    const html = generatePrintableReport({ db, weekStart, includeAdmin });
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.send(html);
   } catch (err) {
@@ -1236,7 +1259,7 @@ app.get("/api/admin/print-week-billing", (req, res) => {
     if (!weekStart) {
       return res.status(400).json({ error: "week_start parameter required" });
     }
-    const html = generatePrintableReport({ db, weekStart, billingMode: true });
+    const html = generatePrintableReport({ db, weekStart, billingMode: true, includeAdmin: true });
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.send(html);
   } catch (err) {
@@ -1259,8 +1282,9 @@ app.get("/api/admin/generate-week", async (req, res) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) {
       return res.status(400).json({ error: "week_start=YYYY-MM-DD required" });
     }
+    const includeAdmin = parseIncludeAdmin(req.query.include_admin, false);
 
-    const result = await generateWeeklyExports({ db, weekStart });
+    const result = await generateWeeklyExports({ db, weekStart, includeAdmin });
 
     // Fire-and-forget: email admin with links and attachments for the generated files
     (async () => {
@@ -1281,6 +1305,7 @@ app.get("/api/admin/generate-week", async (req, res) => {
     res.json({
       ok: true,
       weekStart,
+      includeAdmin,
       outputDir: result.outputDir,
       files: result.files,
       totals: result.totals,

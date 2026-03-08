@@ -26,9 +26,10 @@ const LOGO_PATHS = [
  * @param {Object} options
  * @param {Database} options.db - SQLite database instance
  * @param {string} options.weekStart - Week start date YYYY-MM-DD
+ * @param {boolean} [options.includeAdmin=false] - Include admin employees in weekly payroll exports
  * @returns {Promise<{files: Array, totals: Object}>}
  */
-export async function generateWeeklyExports({ db, weekStart }) {
+export async function generateWeeklyExports({ db, weekStart, includeAdmin = false }) {
   // Normalize week start to payroll boundary and compute range
   const normalizedWeekStart = weekStartYMD(ymdToDate(weekStart));
   const { ordered } = weekDates(normalizedWeekStart);
@@ -43,7 +44,7 @@ export async function generateWeeklyExports({ db, weekStart }) {
 
   // Query all approved entries for the week, grouped by employee
   const entries = db.prepare(`
-    SELECT te.*, e.name as employee_name, e.default_bill_rate, c.name as customer_name
+    SELECT te.*, e.name as employee_name, e.default_bill_rate, e.role, e.is_admin, c.name as customer_name
     FROM time_entries te
     JOIN employees e ON e.id = te.employee_id
     JOIN customers c ON c.id = te.customer_id
@@ -52,9 +53,20 @@ export async function generateWeeklyExports({ db, weekStart }) {
     ORDER BY te.employee_id, te.work_date ASC
   `).all(weekStartYmd, weekEnd);
 
+  const isAdminEmployee = (row) => {
+    const role = String(row?.role || "").toLowerCase();
+    if (role === "admin") return true;
+    if (Number(row?.is_admin || 0) === 1) return true;
+    return getEmployeeCategory(String(row?.name || row?.employee_name || "")) === "admin";
+  };
+
+  const scopedEntries = includeAdmin
+    ? entries
+    : entries.filter((row) => !isAdminEmployee(row));
+
   // Group by employee
   const byEmployee = new Map();
-  for (const row of entries) {
+  for (const row of scopedEntries) {
     if (!byEmployee.has(row.employee_id)) {
       byEmployee.set(row.employee_id, {
         id: row.employee_id,
@@ -66,8 +78,11 @@ export async function generateWeeklyExports({ db, weekStart }) {
   }
 
   // Ensure all employees exist in the map (create empty entries for those with no approved rows)
-  const allEmployees = db.prepare('SELECT id, name FROM employees ORDER BY name ASC').all();
-  for (const e of allEmployees) {
+  const allEmployees = db.prepare('SELECT id, name, role, is_admin FROM employees ORDER BY name ASC').all();
+  const scopedEmployees = includeAdmin
+    ? allEmployees
+    : allEmployees.filter((row) => !isAdminEmployee(row));
+  for (const e of scopedEmployees) {
     if (!byEmployee.has(e.id)) {
       byEmployee.set(e.id, { id: e.id, name: e.name, entries: [] });
     }
@@ -267,7 +282,9 @@ export async function generateWeeklyExports({ db, weekStart }) {
     ws.addRow(["", "", "", "", "", "", "", "", "", "", "", ""]);
 
     const totalRowIndex = ws.rowCount + 1;
-    const totalRow = ["", "", "", "", "Total:", { formula: `SUM(F3:F${totalRowIndex - 1})` }, "", "", "", "", "", ""];
+    // Sum only detail rows (client column B populated) so daily subtotal rows
+    // are not double-counted in the grand total.
+    const totalRow = ["", "", "", "", "Total:", { formula: `SUMIF(B3:B${totalRowIndex - 1},"<>",F3:F${totalRowIndex - 1})` }, "", "", "", "", "", ""];
     const totalRowObj = ws.addRow(totalRow);
     totalRowObj.font = { bold: true };
     totalRowObj.getCell(5).border = { top: { style: 'thin' }, bottom: { style: 'double' } };
@@ -428,7 +445,7 @@ export async function generateWeeklyExports({ db, weekStart }) {
   totals.adminAmount = round2(totals.adminAmount || 0);
   totals.hourlyAmount = round2(totals.hourlyAmount || 0);
 
-  console.log(`[generateWeekly] Week ${weekStart}: ${files.length} employee files generated`);
+  console.log(`[generateWeekly] Week ${weekStart}: ${files.length} employee files generated (includeAdmin=${includeAdmin ? "yes" : "no"})`);
   console.log(`[generateWeekly] Totals: ${totals.totalHours}hrs (${totals.totalRegular} reg + ${totals.totalOT} OT) = $${totals.totalAmount}`);
 
   return { files, totals, outputDir };
