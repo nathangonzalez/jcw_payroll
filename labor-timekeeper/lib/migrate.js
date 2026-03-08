@@ -8,6 +8,7 @@ export async function migrate(db) {
   await ensureColumn(db, 'time_entries', 'entry_type', "TEXT NOT NULL DEFAULT 'REGULAR'");
   await ensureColumn(db, 'time_entries', 'start_time', "TEXT DEFAULT ''");
   await ensureColumn(db, 'time_entries', 'end_time', "TEXT DEFAULT ''");
+  await ensureColumn(db, 'time_entries', 'archived', "INTEGER NOT NULL DEFAULT 0");
   await ensureColumn(db, 'employees', 'role', "TEXT NOT NULL DEFAULT 'hourly'");
   await ensureColumn(db, 'employees', 'aliases_json', "TEXT DEFAULT '[]'");
   await ensureColumn(db, 'employees', 'client_bill_rate', "REAL DEFAULT NULL");
