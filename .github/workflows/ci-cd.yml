@@ -126,7 +126,7 @@ jobs:
       HUSKY: "0"
       UAT_DEMO: "1"
       UAT_WEEK_START: "2026-02-25"
-      BASE_URL: ${{ needs.deploy-patch.outputs.patch_url }}
+      BASE_URL: https://p${{ github.run_id }}-dot-labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com
       ADMIN_SECRET_UAT: ${{ secrets.ADMIN_SECRET }}
     steps:
       - name: Checkout
