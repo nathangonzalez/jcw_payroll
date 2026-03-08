@@ -60,6 +60,10 @@
         <div class="col">
           <label class="small muted">Payroll Week</label>
           <div id="reportWeekLabel" class="small muted"></div>
+          <label class="small" style="display:flex; gap:6px; align-items:center; margin-top:6px;">
+            <input id="includeAdminWeekly" type="checkbox" />
+            Include Admin (Chris Jacobi, Chris Zavesky)
+          </label>
         </div>
         <div class="col">
           <label class="small muted">Month</label>
@@ -338,7 +342,12 @@ async function downloadMonthly() {
 function printWeekTimesheets() {
   const weekStart = el('weekSelect')?.value || CURRENT_WEEK_START;
   if (!weekStart) { alert('Select a week first'); return; }
-  window.open(`/api/admin/print-week?week_start=${encodeURIComponent(weekStart)}`, '_blank');
+  const includeAdmin = !!el('includeAdminWeekly')?.checked;
+  const qs = new URLSearchParams({
+    week_start: weekStart,
+    include_admin: includeAdmin ? '1' : '0',
+  });
+  window.open(`/api/admin/print-week?${qs.toString()}`, '_blank');
 }
 
 async function downloadBilling() {

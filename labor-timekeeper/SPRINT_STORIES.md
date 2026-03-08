@@ -175,6 +175,75 @@
 - Show warning in UI if potential duplicate detected
 - **Acceptance:** Duplicate submissions are blocked with clear error message
 
+### US-4.4 🔲 Excel Export Layout Cleanup + Pretty Print Parity
+- Remove dead/blank spacer rows in weekly and monthly XLSX exports that create unnecessary white space when printed.
+- Normalize row heights, borders, and table spacing so sheets are compact and readable.
+- Align visual hierarchy with HTML print view:
+  - clear section header
+  - consistent day subtotal rows
+  - strong grand total row
+  - readable summary panel formatting
+- Ensure formulas and totals still calculate after layout changes.
+- **Acceptance:** Exported XLSX prints without large empty blocks and visually matches the HTML print report structure.
+
+---
+
+## Sprint 5: Payroll Model Decoupling + Formula Integrity
+**Goal:** Decouple admin salary flows from weekly payroll exports and guarantee formula correctness.
+
+### US-5.1 ?? Decouple Admin From Weekly Payroll Export
+- Exclude admin employees from weekly crew payroll calculations by default.
+- Add explicit include/exclude controls for admin category in export endpoints and admin UI.
+- Keep admin records in database and reports, but outside weekly payroll totals unless explicitly enabled.
+- **Acceptance:** Weekly payroll totals do not change when Chris Jacobi/Chris Z entries are present unless "Include Admin" is selected.
+
+### US-5.2 ?? Separate Admin Monthly Payroll Sheet (Template Match)
+- Create a dedicated admin monthly sheet layout that mimics `Admin_Monthly_Payroll (Feb) - r1.xlsx`.
+- Replace per-employee weekly workbook outputs with one consolidated workbook layout:
+  - tabs labeled by payroll week (`Week 1`, `Week 2`, ... or `Week of <date>`)
+  - one dedicated `Admin` tab for Chris Jacobi + Chris Zavesky
+  - no individual employee tabs for weekly review.
+- Keep weekly crew payroll sheets independent from admin monthly salary sheet.
+- Ensure admin sheet can be generated without touching weekly payroll formulas.
+- **Acceptance:** Monthly workbook contains distinct tabs/sections for Crew Weekly and Admin Monthly with no cross-coupling.
+
+### US-5.3 ?? Formula Guardrail Test Suite
+- Add automated checks for every critical formula column (hours, regular/OT, OT premium, totals, monthly rollups).
+- Validate formula references after row insert/delete and spacer cleanup.
+- Fail generation if broken formulas or `#REF!`/`#VALUE!` are detected.
+- **Acceptance:** Export pipeline blocks broken workbooks and reports exact sheet/cell failures.
+
+### US-5.4 ?? Remove Dead Space In XLSX + Pretty Print Pass
+- Implement row compaction to remove dead blank blocks in weekly and admin sheets.
+- Align print area, page breaks, and table styling to mirror HTML pretty print (single review pack style).
+- Preserve comments/notes columns while compacting spacing.
+- **Acceptance:** Printed XLSX uses compact pages with no large empty gaps and legible formatting.
+
+### US-5.5 ?? Admin Delete + Week Selection Reliability
+- Harden admin delete flow so force-delete never depends on employee_id.
+- Improve admin week default to latest non-empty payroll week when current week is empty.
+- **Acceptance:** Admin can delete approved entries reliably and All Entries opens on a non-empty week when available.
+
+### US-5.6 ?? Slack Proof-Of-Work And Approval Traceability
+- Post one concise Slack summary per run: active workers, completed spikes, blockers, and queue depth.
+- Include evidence pointers (artifact id, commit hash/branch when code exists).
+- Split proposal approval from implementation approval to avoid blind approvals.
+- **Acceptance:** Slack channel shows actionable status only; each approval maps to auditable output.
+
+### US-5.7 ?? Admin Billing Defaults From Reference Artifact
+- Parse the reference workbook (`Admin_Monthly_Payroll (Feb) - r1.xlsx`) and lock admin billing defaults.
+- Set `client_bill_rate` defaults for Chris Jacobi and Chris Zavesky to the artifact value.
+- Keep these rates billing-only; do not reintroduce admin salary rows into weekly crew payroll totals.
+- **Acceptance:** Billing report uses $100 client rate for both Chris entries; weekly payroll remains admin-excluded by default.
+
+### US-5.8 ?? Customer List Cleanup (Admin Request - Emily)
+- Normalize duplicate Tubergen spellings to one canonical customer record.
+- Remove standalone `Office` and `JCW` from the employee app customer options.
+- Add a single consolidated option: `JCW, Office, Shop`.
+- Migrate/merge historical entries so reporting rolls up under canonical names (no split totals from spelling variants).
+- Keep an admin-safe mapping/alias layer so legacy imports with old names still resolve correctly.
+- **Acceptance:** App dropdown shows one Tubergen entry and one `JCW, Office, Shop` option; payroll/billing exports aggregate correctly without duplicate customer lines.
+
 ---
 
 ## Current Production Status
