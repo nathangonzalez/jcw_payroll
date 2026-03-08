@@ -166,6 +166,7 @@ let submittedCache=[];
 let CURRENT_WEEK_START = '';
 let CURRENT_WEEK_RANGE = '';
 let CURRENT_MONTH = '';
+const BILLING_UI_ENABLED = false;
 
 function shiftYmd(ymd, days){
   const [y,m,d] = (ymd || '').split('-').map(Number);
@@ -176,6 +177,26 @@ function shiftYmd(ymd, days){
   const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
   const dd = String(dt.getUTCDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
+}
+
+function compareEntriesForPayrollView(a, b) {
+  const dateCmp = String(a?.work_date || '').localeCompare(String(b?.work_date || ''));
+  if (dateCmp) return dateCmp;
+  const customerCmp = String(a?.customer_name || '').localeCompare(String(b?.customer_name || ''));
+  if (customerCmp) return customerCmp;
+  const rateCmp = Number(a?.employee_rate || 0) - Number(b?.employee_rate || 0);
+  if (rateCmp) return rateCmp;
+  const employeeCmp = String(a?.employee_name || '').localeCompare(String(b?.employee_name || ''));
+  if (employeeCmp) return employeeCmp;
+  const startCmp = String(a?.start_time || '').localeCompare(String(b?.start_time || ''));
+  if (startCmp) return startCmp;
+  return Number(a?.id || 0) - Number(b?.id || 0);
+}
+
+function fmtRate(v) {
+  const n = Number(v || 0);
+  if (!Number.isFinite(n)) return '$0.00';
+  return `$${n.toFixed(2)}`;
 }
 
 function buildWeekOptions(currentWeekStart, weeks){
@@ -269,7 +290,11 @@ async function init(){
 
   // Report download buttons
   el('genMonthBtn').onclick = downloadMonthly;
-  el('genBillingBtn').onclick = downloadBilling;
+  const billingBtn = el('genBillingBtn');
+  if (billingBtn) {
+    billingBtn.style.display = BILLING_UI_ENABLED ? '' : 'none';
+    if (BILLING_UI_ENABLED) billingBtn.onclick = downloadBilling;
+  }
   const previewBtn = el('previewMonthBtn'); if (previewBtn) previewBtn.onclick = previewReport;
   const seedBtn = el('seedWeeksBtn'); if (seedBtn) seedBtn.style.display = 'none';
   el('previewReconcileBtn').onclick = previewReconcile;
@@ -505,8 +530,9 @@ async function loadSubmitted(){
 }
 
 function renderSubmitted(rows, comments){
+  const sortedRows = [...(rows || [])].sort(compareEntriesForPayrollView);
   const commentRows = (comments || []).map(c => `<tr><td>${c.employee_name}</td><td>${c.comment || ''}</td><td>${c.week_start}</td></tr>`).join('');
-  if (!rows.length){
+  if (!sortedRows.length){
     el('submitted').innerHTML = `
       <p class="muted">No submitted entries.</p>
       ${commentRows ? `
@@ -521,28 +547,29 @@ function renderSubmitted(rows, comments){
     `;
     return;
   }
-  const totalHours = rows.reduce((sum, r) => sum + Number(r.hours), 0);
+  const totalHours = sortedRows.reduce((sum, r) => sum + Number(r.hours), 0);
   const html = `
     <table>
       <thead><tr>
         <th><input type="checkbox" id="selectAll" title="Select All" /></th>
-        <th>Date</th><th>Employee</th><th>Customer</th><th>Hours</th>
+        <th>Date</th><th>Customer</th><th>Employee</th><th>Rate</th><th>Hours</th>
         <th>Action</th>
       </tr></thead>
       <tbody>
-        ${rows.map(r=>`
+        ${sortedRows.map(r=>`
           <tr>
             <td><input type="checkbox" class="entry-cb" data-id="${r.id}" /></td>
             <td>${r.work_date}</td>
-            <td>${r.employee_name}</td>
             <td>${r.customer_name}</td>
+            <td>${r.employee_name}</td>
+            <td>${fmtRate(r.employee_rate)}</td>
             <td>${Number(r.hours)}</td>
-            <td><button class="delete-entry-btn badge" data-id="${r.id}" style="background:#e74c3c;color:white;padding:4px 8px;font-size:11px;">🗑️</button></td>
+            <td><button class="delete-entry-btn badge" data-id="${r.id}" style="background:#e74c3c;color:white;padding:4px 8px;font-size:11px;">Delete</button></td>
           </tr>
         `).join('')}
       </tbody>
       <tfoot><tr style="font-weight:bold; background:#f0f0f0;">
-        <td></td><td colspan="3">Total (${rows.length} entries)</td><td>${totalHours}</td><td></td>
+        <td></td><td colspan="4">Total (${sortedRows.length} entries)</td><td>${totalHours}</td><td></td>
       </tr></tfoot>
     </table>
     ${commentRows ? `
@@ -556,7 +583,7 @@ function renderSubmitted(rows, comments){
     ` : ''}
   `;
   el('submitted').innerHTML = html;
-  
+
   // Select All handler
   el('selectAll').onchange = function() {
     document.querySelectorAll('.entry-cb').forEach(cb => cb.checked = this.checked);
@@ -573,6 +600,7 @@ function renderSubmitted(rows, comments){
 }
 
 function updateSelectAllState() {
+
   const all = document.querySelectorAll('.entry-cb');
   const checked = document.querySelectorAll('.entry-cb:checked');
   const selectAll = el('selectAll');
@@ -613,43 +641,34 @@ async function loadAllEntries() {
   const list = el('allEntriesList');
   div.style.display = 'block';
   list.innerHTML = '<p>Loading...</p>';
-  
+
   try {
     const qs = CURRENT_WEEK_START ? ('?week_start=' + encodeURIComponent(CURRENT_WEEK_START)) : '';
     const data = await api('/api/admin/all-entries' + qs);
-    const entries = data.entries || [];
-    
+    const entries = [...(data.entries || [])].sort(compareEntriesForPayrollView);
+
     if (!entries.length) {
       list.innerHTML = '<p class="muted">No entries for this week.</p>';
       return;
     }
-    
-    // Group by employee
-    const byEmp = {};
-    for (const e of entries) {
-      const name = e.employee_name || 'Unknown';
-      if (!byEmp[name]) byEmp[name] = [];
-      byEmp[name].push(e);
-    }
-    
-    let html = '<table><thead><tr><th>Date</th><th>Employee</th><th>Customer</th><th>Hours</th><th>Status</th><th>Action</th></tr></thead><tbody>';
-    for (const emp of Object.keys(byEmp).sort()) {
-      for (const r of byEmp[emp]) {
-        const statusColor = r.status === 'APPROVED' ? '#27ae60' : (r.status === 'SUBMITTED' ? '#f39c12' : '#95a5a6');
-        html += `
+
+    let html = '<table><thead><tr><th>Date</th><th>Customer</th><th>Employee</th><th>Rate</th><th>Hours</th><th>Status</th><th>Action</th></tr></thead><tbody>';
+    for (const r of entries) {
+      const statusColor = r.status === 'APPROVED' ? '#27ae60' : (r.status === 'SUBMITTED' ? '#f39c12' : '#95a5a6');
+      html += `
           <tr>
             <td>${r.work_date}</td>
-            <td>${r.employee_name}</td>
             <td>${r.customer_name}</td>
+            <td>${r.employee_name}</td>
+            <td>${fmtRate(r.employee_rate)}</td>
             <td>${Number(r.hours)}</td>
             <td><span style="background:${statusColor};color:white;padding:2px 6px;border-radius:3px;font-size:11px;">${r.status}</span></td>
-            <td><button class="delete-entry-btn badge" data-id="${r.id}" style="background:#e74c3c;color:white;padding:4px 8px;font-size:11px;">🗑️</button></td>
+            <td><button class="delete-entry-btn badge" data-id="${r.id}" style="background:#e74c3c;color:white;padding:4px 8px;font-size:11px;">Delete</button></td>
           </tr>`;
-      }
     }
     html += '</tbody></table>';
     list.innerHTML = html;
-    
+
     // Attach delete handlers
     document.querySelectorAll('#allEntriesList .delete-entry-btn').forEach(btn => {
       btn.onclick = () => deleteEntry(btn.getAttribute('data-id'));

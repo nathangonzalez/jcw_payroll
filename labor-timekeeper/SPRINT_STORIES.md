@@ -244,6 +244,20 @@
 - Keep an admin-safe mapping/alias layer so legacy imports with old names still resolve correctly.
 - **Acceptance:** App dropdown shows one Tubergen entry and one `JCW, Office, Shop` option; payroll/billing exports aggregate correctly without duplicate customer lines.
 
+### US-5.9 ?? Hide Billing Module In Admin UI (Backend Retained)
+- Hide billing export controls from admin frontend by default.
+- Keep billing endpoints and rate logic in backend for future re-enable.
+- **Acceptance:** Admin page no longer shows billing export button, but no backend routes are removed.
+
+### US-5.10 ?? Weekly Payroll Sort Order Parity With Manual Books
+- Sort submitted/all-entries payroll views by:
+  - `work_date` ascending
+  - `customer_name` ascending
+  - employee pay rate ascending (least paid first)
+  - `employee_name` ascending
+- Display employee rate in admin tables for transparent review order.
+- **Acceptance:** Admin review tables consistently follow date/customer/rate ordering and match manual bookkeeping flow.
+
 ---
 
 ## Current Production Status

@@ -67,7 +67,7 @@ jobs:
   deploy-patch:
     name: Deploy Patch (no promote)
     needs: build-and-test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -110,7 +110,7 @@ jobs:
   uat-demo-patch:
     name: UAT Demo (Patch URL)
     needs: deploy-patch
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       HUSKY: "0"

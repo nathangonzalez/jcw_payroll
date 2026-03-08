@@ -934,13 +934,13 @@ app.get("/api/approvals", (req, res) => {
   const end = ordered[6].ymd;
 
   const rows = db.prepare(`
-    SELECT te.*, e.name as employee_name, c.name as customer_name
+    SELECT te.*, e.name as employee_name, e.default_bill_rate as employee_rate, c.name as customer_name
     FROM time_entries te
     JOIN employees e ON e.id = te.employee_id
     JOIN customers c ON c.id = te.customer_id
     WHERE te.work_date >= ? AND te.work_date <= ?
       AND te.status = 'SUBMITTED'
-    ORDER BY te.work_date ASC, e.name ASC
+    ORDER BY te.work_date ASC, c.name ASC, COALESCE(e.default_bill_rate, 0) ASC, e.name ASC, te.start_time ASC, te.created_at ASC
   `).all(start, end);
 
   const comments = db.prepare(`
@@ -1017,12 +1017,12 @@ app.get("/api/admin/all-entries", (req, res) => {
   const end = ordered[6].ymd;
 
   const rows = db.prepare(`
-    SELECT te.*, e.name as employee_name, c.name as customer_name
+    SELECT te.*, e.name as employee_name, e.default_bill_rate as employee_rate, c.name as customer_name
     FROM time_entries te
     JOIN employees e ON e.id = te.employee_id
     JOIN customers c ON c.id = te.customer_id
     WHERE te.work_date >= ? AND te.work_date <= ? AND te.archived = 0
-    ORDER BY te.work_date ASC, e.name ASC
+    ORDER BY te.work_date ASC, c.name ASC, COALESCE(e.default_bill_rate, 0) ASC, e.name ASC, te.start_time ASC, te.created_at ASC
   `).all(start, end);
 
   res.json({ week_start: weekStart, entries: rows });
