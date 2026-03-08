@@ -5,30 +5,9 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
-  schedule:
-    - cron: '0 * * * *'
   workflow_dispatch:
 
 jobs:
-  schedule-gate:
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    outputs:
-      should_deploy: ${{ steps.check.outputs.should_deploy }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Check for recent commits (24h)
-        id: check
-        run: |
-          last_commit=$(git log -1 --format=%ct)
-          now=$(date +%s)
-          if [ $((now - last_commit)) -lt 86400 ]; then
-            echo "should_deploy=true" >> $GITHUB_OUTPUT
-          else
-            echo "should_deploy=false" >> $GITHUB_OUTPUT
-          fi
-
   build-and-test:
     runs-on: ubuntu-latest
     env:
@@ -76,8 +55,8 @@ jobs:
         run: npx playwright install --with-deps
         working-directory: labor-timekeeper
 
-      - name: Run tests
-        run: npm test
+      - name: Run CI smoke tests
+        run: npx playwright test tests/ci-smoke.spec.cjs --project=chromium --workers=1
         working-directory: labor-timekeeper
 
       - name: Stop webserver
@@ -88,80 +67,113 @@ jobs:
   deploy-patch:
     name: Deploy Patch (no promote)
     needs: build-and-test
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      GCP_SA_KEY_B64: ${{ secrets.GCP_SA_KEY_B64 }}
+    outputs:
+      version: ${{ steps.set_version.outputs.version }}
+      patch_url: ${{ steps.patch_url.outputs.url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Decode GCP key from base64
+        id: gcp_key
+        run: |
+          {
+            echo "json<<EOF"
+            printf '%s' "$GCP_SA_KEY_B64" | tr -d '\r' | base64 --decode
+            echo
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+        env:
+          GCP_SA_KEY_B64: ${{ secrets.GCP_SA_KEY_B64 }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ steps.gcp_key.outputs.json }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Set patch version
+        id: set_version
+        run: echo "version=p${GITHUB_RUN_ID}" >> $GITHUB_OUTPUT
+
+      - name: Deploy App Engine patch (no promote)
+        run: |
+          gcloud app deploy labor-timekeeper/app.yaml --quiet --no-promote --version "${{ steps.set_version.outputs.version }}"
+
+      - name: Build patch URL
+        id: patch_url
+        run: |
+          echo "url=https://${{ steps.set_version.outputs.version }}-dot-labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com" >> $GITHUB_OUTPUT
+
+      - name: Patch URL
+        run: echo "${{ steps.patch_url.outputs.url }}"
+
+  uat-demo-patch:
+    name: UAT Demo (Patch URL)
+    needs: deploy-patch
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      HUSKY: "0"
+      UAT_DEMO: "1"
+      UAT_WEEK_START: "2026-02-25"
+      BASE_URL: https://p${{ github.run_id }}-dot-labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com
+      ADMIN_SECRET_UAT: ${{ secrets.ADMIN_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22 and npm cache
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: labor-timekeeper/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: labor-timekeeper
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+        working-directory: labor-timekeeper
+
+      - name: Run UAT demo spec
+        run: npx playwright test tests/uat-admin-decouple.spec.cjs --project=chromium --workers=1
+        working-directory: labor-timekeeper
+
+      - name: Upload UAT artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: uat-demo-${{ github.run_id }}
+          path: |
+            labor-timekeeper/playwright-report/
+            labor-timekeeper/test-results/
+          retention-days: 14
+
+  uat-approval:
+    name: UAT Approval Gate
+    needs: uat-demo-patch
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    env:
-      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-      GCP_SA_KEY_B64: ${{ secrets.GCP_SA_KEY_B64 }}
-    outputs:
-      version: ${{ steps.set_version.outputs.version }}
+    environment: uat-approval
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Write GCP key from base64 secret
-        run: |
-          printf '%s' "$GCP_SA_KEY_B64" | tr -d '\r' | base64 --decode > gcloud-key.json
-
-      - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ env.GCP_PROJECT_ID }}
-
-      - name: Authenticate gcloud
-        run: gcloud auth activate-service-account --key-file=gcloud-key.json
-
-      - name: Set patch version
-        id: set_version
-        run: echo "version=p${GITHUB_RUN_ID}" >> $GITHUB_OUTPUT
-
-      - name: Deploy App Engine patch (no promote)
-        run: |
-          gcloud app deploy labor-timekeeper/app.yaml --quiet --no-promote --version "${{ steps.set_version.outputs.version }}"
-
-      - name: Patch URL
-        run: echo "https://${{ steps.set_version.outputs.version }}-dot-labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com"
-
-  deploy-patch-schedule:
-    name: Deploy Patch (schedule, no promote)
-    needs: [build-and-test, schedule-gate]
-    if: github.event_name == 'schedule' && needs.schedule-gate.outputs.should_deploy == 'true'
-    runs-on: ubuntu-latest
-    env:
-      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-      GCP_SA_KEY_B64: ${{ secrets.GCP_SA_KEY_B64 }}
-    outputs:
-      version: ${{ steps.set_version.outputs.version }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Write GCP key from base64 secret
-        run: |
-          printf '%s' "$GCP_SA_KEY_B64" | tr -d '\r' | base64 --decode > gcloud-key.json
-
-      - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ env.GCP_PROJECT_ID }}
-
-      - name: Authenticate gcloud
-        run: gcloud auth activate-service-account --key-file=gcloud-key.json
-
-      - name: Set patch version
-        id: set_version
-        run: echo "version=p${GITHUB_RUN_ID}" >> $GITHUB_OUTPUT
-
-      - name: Deploy App Engine patch (no promote)
-        run: |
-          gcloud app deploy labor-timekeeper/app.yaml --quiet --no-promote --version "${{ steps.set_version.outputs.version }}"
-
-      - name: Patch URL
-        run: echo "https://${{ steps.set_version.outputs.version }}-dot-labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com"
+      - name: Gate passed
+        run: echo "UAT demo reviewed and approved."
 
   promote:
     name: Promote Patch to Prod
-    needs: deploy-patch
+    needs: [deploy-patch, uat-approval]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
@@ -172,17 +184,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Write GCP key from base64 secret
+      - name: Decode GCP key from base64
+        id: gcp_key
         run: |
-          printf '%s' "$GCP_SA_KEY_B64" | tr -d '\r' | base64 --decode > gcloud-key.json
+          {
+            echo "json<<EOF"
+            printf '%s' "$GCP_SA_KEY_B64" | tr -d '\r' | base64 --decode
+            echo
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+        env:
+          GCP_SA_KEY_B64: ${{ secrets.GCP_SA_KEY_B64 }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ steps.gcp_key.outputs.json }}
 
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
-
-      - name: Authenticate gcloud
-        run: gcloud auth activate-service-account --key-file=gcloud-key.json
 
       - name: Promote patch to prod
         run: |

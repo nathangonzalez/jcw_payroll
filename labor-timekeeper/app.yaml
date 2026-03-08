@@ -43,17 +43,4 @@ handlers:
     script: auto
     secure: always
 
-# Health check
-liveness_check:
-  path: "/api/health"
-  check_interval_sec: 30
-  timeout_sec: 4
-  failure_threshold: 2
-  success_threshold: 2
-
-readiness_check:
-  path: "/api/health"
-  check_interval_sec: 5
-  timeout_sec: 4
-  failure_threshold: 2
-  success_threshold: 2
+# App Engine Standard does not support liveness/readiness check blocks.

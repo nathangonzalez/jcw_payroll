@@ -8,12 +8,14 @@ export async function migrate(db) {
   await ensureColumn(db, 'time_entries', 'entry_type', "TEXT NOT NULL DEFAULT 'REGULAR'");
   await ensureColumn(db, 'time_entries', 'start_time', "TEXT DEFAULT ''");
   await ensureColumn(db, 'time_entries', 'end_time', "TEXT DEFAULT ''");
+  await ensureColumn(db, 'time_entries', 'archived', "INTEGER NOT NULL DEFAULT 0");
   await ensureColumn(db, 'employees', 'role', "TEXT NOT NULL DEFAULT 'hourly'");
   await ensureColumn(db, 'employees', 'aliases_json', "TEXT DEFAULT '[]'");
   await ensureColumn(db, 'employees', 'client_bill_rate', "REAL DEFAULT NULL");
 
   // Seed client_bill_rate for existing employees if NULL
   await seedClientBillRates(db);
+  await ensureAdminCustomerRateOverrides(db);
 
   // Ensure weekly comments table exists
   db.exec(`
@@ -72,8 +74,8 @@ export async function migrate(db) {
 async function seedClientBillRates(db) {
   const CLIENT_RATES = {
     "Boban Abbate": 90,
-    "Chris Zavesky": 90,
-    "Chris Jacobi": 90,
+    "Chris Zavesky": 100,
+    "Chris Jacobi": 100,
     "Thomas Brinson": 90,
     "Phil Henderson": 90,
     "Jason Green": 75,
@@ -85,9 +87,18 @@ async function seedClientBillRates(db) {
     const update = db.prepare(
       "UPDATE employees SET client_bill_rate = ? WHERE LOWER(name) = LOWER(?) AND client_bill_rate IS NULL"
     );
+    const updateAdminLegacy = db.prepare(
+      "UPDATE employees SET client_bill_rate = ? WHERE LOWER(name) = LOWER(?) AND (client_bill_rate IS NULL OR ABS(client_bill_rate - 90) < 0.001)"
+    );
     let count = 0;
     for (const [name, rate] of Object.entries(CLIENT_RATES)) {
       const result = update.run(rate, name);
+      if (result.changes > 0) count++;
+    }
+    // Artifact-based admin default correction:
+    // CJ/CZ billing sheets in "Admin_Monthly_Payroll (Feb) - r1.xlsx" are consistently $100.
+    for (const adminName of ["Chris Jacobi", "Chris Zavesky"]) {
+      const result = updateAdminLegacy.run(100, adminName);
       if (result.changes > 0) count++;
     }
     if (count > 0) {
@@ -95,6 +106,52 @@ async function seedClientBillRates(db) {
     }
   } catch (e) {
     console.error('[migrate] seedClientBillRates failed:', String(e));
+  }
+}
+
+/**
+ * Ensure CJ/CZ have explicit per-customer billing rates for customers they touch.
+ * If an override is missing, seed it to 100 (artifact default), while preserving
+ * any existing non-100 negotiated override already in rate_overrides.
+ */
+async function ensureAdminCustomerRateOverrides(db) {
+  try {
+    const admins = db.prepare(
+      "SELECT id, name FROM employees WHERE LOWER(name) IN ('chris jacobi', 'chris zavesky', 'chris z')"
+    ).all();
+    if (!admins.length) return;
+
+    const customerRowsStmt = db.prepare(`
+      SELECT DISTINCT te.customer_id AS customer_id
+      FROM time_entries te
+      WHERE te.employee_id = ?
+        AND te.customer_id IS NOT NULL
+    `);
+    const upsert = db.prepare(`
+      INSERT INTO rate_overrides (id, employee_id, customer_id, bill_rate, created_at)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(employee_id, customer_id) DO NOTHING
+    `);
+
+    const now = new Date().toISOString();
+    let seeded = 0;
+    const tx = db.transaction(() => {
+      for (const admin of admins) {
+        const customerRows = customerRowsStmt.all(admin.id);
+        for (const row of customerRows) {
+          const rid = `ro_seed_${admin.id}_${row.customer_id}`;
+          const result = upsert.run(rid, admin.id, row.customer_id, 100, now);
+          if (result.changes > 0) seeded++;
+        }
+      }
+    });
+    tx();
+
+    if (seeded > 0) {
+      console.log(`[migrate] Seeded ${seeded} CJ/CZ per-customer rate_overrides at $100 default`);
+    }
+  } catch (e) {
+    console.error("[migrate] ensureAdminCustomerRateOverrides failed:", String(e));
   }
 }
 
