@@ -48,6 +48,7 @@ test.describe("UAT Demo - Weekly Payroll Admin Decoupling", () => {
 
     await test.step("Select target payroll week", async () => {
       const weeks = await page.locator("#weekSelect option").allTextContents();
+      expect(weeks.length, "Expected payroll week options in #weekSelect").toBeGreaterThan(0);
       let selectedWeek = weeks.includes(WEEK_START) ? WEEK_START : (weeks[0] || WEEK_START);
       for (const week of weeks) {
         const html = await page.evaluate(async (w) => {
@@ -71,7 +72,7 @@ test.describe("UAT Demo - Weekly Payroll Admin Decoupling", () => {
       await page.locator("#includeAdminWeekly").uncheck();
       const [popup] = await Promise.all([
         page.waitForEvent("popup"),
-        page.locator('button:has-text("Print Payroll")').click(),
+        page.locator("#printWeekBtn").click(),
       ]);
       await popup.waitForLoadState("domcontentloaded");
       await popup.waitForTimeout(1500);
@@ -88,7 +89,7 @@ test.describe("UAT Demo - Weekly Payroll Admin Decoupling", () => {
       await page.locator("#includeAdminWeekly").check();
       const [popup] = await Promise.all([
         page.waitForEvent("popup"),
-        page.locator('button:has-text("Print Payroll")').click(),
+        page.locator("#printWeekBtn").click(),
       ]);
       await popup.waitForLoadState("domcontentloaded");
       await popup.waitForTimeout(1500);
