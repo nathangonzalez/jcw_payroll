@@ -9,19 +9,20 @@ This repo now supports a VM-native staging lane for Labor Timekeeper.
   - port `18080`
   - env file `.env.staging`
   - DB path `data/staging/app.db`
-- UAT runs against staging through an SSH tunnel in GitHub Actions.
+- Deploy/UAT/promote now run on a GitHub self-hosted runner on the VM.
 - Promote deploys the exact approved commit SHA to prod service (`labor-timekeeper`).
 - Promote fails if prod is not loopback-bound on `:8080`.
 
+## Prerequisite
+
+Install and register a self-hosted runner:
+
+1. `docs/self-hosted-runner.md`
+2. `scripts/setup_self_hosted_runner.sh`
+3. `docs/caddy-ops.md` (proxy health + recovery)
+
 ## Required GitHub Secrets
 
-- `VM_HOST`
-- `VM_USER`
-- `VM_SSH_KEY`
-
-Optional:
-
-- `VM_SSH_PORT` (default `22`)
 - `VM_SERVICE_USER` (default `nathan`)
 - `VM_DEPLOY_PATH` (default `/home/<VM_SERVICE_USER>/dev/repos/jcw_payroll`)
 - `VM_STAGING_DEPLOY_PATH` (default `/home/<VM_SERVICE_USER>/dev/repos/jcw_payroll-staging`)
@@ -39,9 +40,10 @@ Optional:
 
 1. Run `CI/CD` workflow with `workflow_dispatch`.
 2. Confirm jobs pass:
-   - `build-and-test`
-   - `deploy-staging`
+  - `build-and-test`
+  - `deploy-staging`
    - `uat-demo`
    - `uat-approval` (manual gate)
    - `promote`
 3. Verify prod health endpoint returns `ok: true`.
+4. Verify VM proxy service is up: `systemctl is-active caddy`.
