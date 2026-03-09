@@ -193,9 +193,9 @@
 
 ### US-5.1 ?? Decouple Admin From Weekly Payroll Export
 - Exclude admin employees from weekly crew payroll calculations by default.
-- Add explicit include/exclude controls for admin category in export endpoints and admin UI.
-- Keep admin records in database and reports, but outside weekly payroll totals unless explicitly enabled.
-- **Acceptance:** Weekly payroll totals do not change when Chris Jacobi/Chris Z entries are present unless "Include Admin" is selected.
+- Remove include-admin controls from weekly payroll UI to prevent accidental payroll mixing.
+- Keep admin records in database and monthly admin replacement workflow, but outside weekly payroll totals.
+- **Acceptance:** Weekly payroll totals never include Chris Jacobi/Chris Zavesky, and weekly print UI has no include-admin toggle.
 
 ### US-5.2 ?? Separate Admin Monthly Payroll Sheet (Template Match)
 - Create a dedicated admin monthly sheet layout that mimics `Admin_Monthly_Payroll (Feb) - r1.xlsx`.

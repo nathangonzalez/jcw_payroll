@@ -1239,7 +1239,8 @@ app.get("/api/admin/print-week", (req, res) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) {
       return res.status(400).json({ error: "week_start=YYYY-MM-DD required" });
     }
-    const includeAdmin = parseIncludeAdmin(req.query.include_admin, false);
+    // Policy: weekly payroll excludes admin roles.
+    const includeAdmin = false;
     const html = generatePrintableReport({ db, weekStart, includeAdmin });
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.send(html);
@@ -1282,7 +1283,8 @@ app.get("/api/admin/generate-week", async (req, res) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) {
       return res.status(400).json({ error: "week_start=YYYY-MM-DD required" });
     }
-    const includeAdmin = parseIncludeAdmin(req.query.include_admin, false);
+    // Policy: weekly payroll exports exclude admin roles.
+    const includeAdmin = false;
 
     const result = await generateWeeklyExports({ db, weekStart, includeAdmin });
 

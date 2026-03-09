@@ -3,6 +3,7 @@ const { test, expect } = require("@playwright/test");
 const WEEK_START = process.env.UAT_WEEK_START || "2026-02-25";
 const ADMIN_SECRET = process.env.ADMIN_SECRET_UAT || process.env.ADMIN_SECRET || "demo";
 const RUN_UAT = process.env.UAT_DEMO === "1";
+const STEP_PAUSE_MS = Number(process.env.UAT_STEP_PAUSE_MS || 2500);
 
 test.use({
   video: "on",
@@ -10,94 +11,102 @@ test.use({
   trace: "on",
 });
 
-async function annotate(page, message) {
-  await page.evaluate((text) => {
-    const id = "__uat_annotate__";
-    const old = document.getElementById(id);
-    if (old) old.remove();
-    const el = document.createElement("div");
-    el.id = id;
-    el.textContent = `UAT: ${text}`;
-    el.style.position = "fixed";
-    el.style.top = "10px";
-    el.style.right = "10px";
-    el.style.zIndex = "999999";
-    el.style.background = "rgba(0,0,0,0.75)";
-    el.style.color = "#fff";
-    el.style.padding = "8px 10px";
-    el.style.borderRadius = "6px";
-    el.style.font = "12px/1.3 Arial, sans-serif";
-    document.body.appendChild(el);
-  }, message);
+async function annotate(page, acId, message) {
+  await page.evaluate(
+    ({ id, text }) => {
+      const elId = "__uat_annotate__";
+      const old = document.getElementById(elId);
+      if (old) old.remove();
+      const el = document.createElement("div");
+      el.id = elId;
+      el.textContent = `UAT ${id}: ${text}`;
+      el.style.position = "fixed";
+      el.style.top = "10px";
+      el.style.right = "10px";
+      el.style.zIndex = "999999";
+      el.style.background = "rgba(0,0,0,0.78)";
+      el.style.color = "#fff";
+      el.style.padding = "10px 12px";
+      el.style.borderRadius = "8px";
+      el.style.maxWidth = "560px";
+      el.style.font = "13px/1.35 Arial, sans-serif";
+      el.style.boxShadow = "0 4px 14px rgba(0,0,0,.4)";
+      document.body.appendChild(el);
+    },
+    { id: acId, text: message }
+  );
+  await page.waitForTimeout(STEP_PAUSE_MS);
 }
 
-test.describe("UAT Demo - Weekly Payroll Admin Decoupling", () => {
+test.describe("UAT Demo - Weekly Payroll Policy + Weekly Preview", () => {
   test.skip(!RUN_UAT, "Set UAT_DEMO=1 to run this human-review demo.");
 
-  test("print payroll excludes admin by default, includes admin when toggled", async ({ page }) => {
+  test("weekly payroll excludes admin and weekly report preview is visible", async ({ page }) => {
     test.slow();
 
-    await test.step("Open admin and unlock", async () => {
+    await test.step("Unlock admin", async () => {
       await page.goto("/admin", { waitUntil: "domcontentloaded" });
-      await annotate(page, "Open admin and unlock");
       await page.locator("#secretInput").fill(ADMIN_SECRET);
       await page.locator("#secretBtn").click();
       await expect(page.locator("#adminContent")).toBeVisible();
-      await page.waitForTimeout(1200);
+      await annotate(page, "AC-1", "Admin screen unlocked and ready for payroll UAT.");
+      await page.screenshot({ path: "test-results/uat-ac-1-admin-unlocked.png", fullPage: true });
     });
 
-    await test.step("Select target payroll week", async () => {
-      const weeks = await page.locator("#weekSelect option").allTextContents();
-      let selectedWeek = weeks.includes(WEEK_START) ? WEEK_START : (weeks[0] || WEEK_START);
-      for (const week of weeks) {
-        const html = await page.evaluate(async (w) => {
-          const res = await fetch(`/api/admin/print-week?week_start=${encodeURIComponent(w)}&include_admin=1`);
-          return res.ok ? await res.text() : "";
-        }, week);
-        if (html.includes("Chris Jacobi") || html.includes("Chris Zavesky")) {
-          selectedWeek = week;
-          break;
-        }
-      }
-      await annotate(page, `Select payroll week ${selectedWeek}`);
+    await test.step("Select payroll week for review", async () => {
+      await expect(page.locator("#weekSelect")).toBeVisible();
+      const weekOptions = await page.locator("#weekSelect option").allTextContents();
+      const selectedWeek = weekOptions.includes(WEEK_START) ? WEEK_START : (weekOptions[0] || WEEK_START);
       await page.selectOption("#weekSelect", selectedWeek);
       await page.locator("#loadWeekBtn").click();
-      await page.waitForTimeout(1500);
-      await page.screenshot({ path: "test-results/uat-decouple-01-week-loaded.png", fullPage: true });
+      await annotate(
+        page,
+        "AC-2",
+        `Weekly payroll report is being tested for week ${selectedWeek}.`
+      );
+      await page.screenshot({ path: "test-results/uat-ac-2-week-selected.png", fullPage: true });
     });
 
-    await test.step("Print payroll with admin excluded (default)", async () => {
-      await annotate(page, "Print payroll with Include Admin OFF");
-      await page.locator("#includeAdminWeekly").uncheck();
+    await test.step("Open weekly All Entries list", async () => {
+      await page.locator("#allEntriesBtn").click();
+      await expect(page.locator("#allEntries")).toBeVisible();
+      await annotate(
+        page,
+        "AC-3",
+        "Weekly data panel is visible (this confirms the weekly report flow is included in the demo)."
+      );
+      await page.screenshot({ path: "test-results/uat-ac-3-weekly-list.png", fullPage: true });
+    });
+
+    await test.step("Print weekly payroll and verify admin names are excluded", async () => {
       const [popup] = await Promise.all([
         page.waitForEvent("popup"),
         page.locator('button:has-text("Print Payroll")').click(),
       ]);
       await popup.waitForLoadState("domcontentloaded");
-      await popup.waitForTimeout(1500);
+      await annotate(
+        popup,
+        "AC-4",
+        "Weekly payroll print must exclude Chris Jacobi and Chris Zavesky."
+      );
       const html = await popup.content();
       expect(html).not.toContain("Chris Jacobi");
       expect(html).not.toContain("Chris Zavesky");
-      await annotate(popup, "Expected: Chris Jacobi / Chris Zavesky absent");
-      await popup.screenshot({ path: "test-results/uat-decouple-02-no-admin.png", fullPage: true });
+      await popup.screenshot({ path: "test-results/uat-ac-4-print-no-admin.png", fullPage: true });
       await popup.close();
     });
 
-    await test.step("Print payroll with admin included", async () => {
-      await annotate(page, "Print payroll with Include Admin ON");
-      await page.locator("#includeAdminWeekly").check();
-      const [popup] = await Promise.all([
-        page.waitForEvent("popup"),
-        page.locator('button:has-text("Print Payroll")').click(),
-      ]);
-      await popup.waitForLoadState("domcontentloaded");
-      await popup.waitForTimeout(1500);
-      const html = await popup.content();
-      expect(html).toContain("Chris Jacobi");
-      expect(html).toContain("Chris Zavesky");
-      await annotate(popup, "Expected: Chris Jacobi / Chris Zavesky present");
-      await popup.screenshot({ path: "test-results/uat-decouple-03-with-admin.png", fullPage: true });
-      await popup.close();
+    await test.step("Preview weekly report section", async () => {
+      await page.locator("#previewMonthBtn").click();
+      await expect(page.locator("#reportPreview")).toBeVisible();
+      await expect(page.locator("#reportPreview")).toContainText("Week of", { timeout: 20000 });
+      await annotate(
+        page,
+        "AC-5",
+        "Preview Report shows weekly summary cards for manager review before approval."
+      );
+      await page.screenshot({ path: "test-results/uat-ac-5-weekly-preview.png", fullPage: true });
     });
   });
 });
+
