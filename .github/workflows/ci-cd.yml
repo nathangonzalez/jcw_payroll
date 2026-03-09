@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      promote_to_prod:
+        description: "Set true to allow production deploy in this manual run"
+        required: false
+        default: "false"
 
 jobs:
   build-and-test:
@@ -311,7 +316,7 @@ jobs:
   promote:
     name: Deploy to VM + Caddy Prod
     needs: uat-approval
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.promote_to_prod == 'true')
     runs-on: ubuntu-latest
     environment: production
     steps:
