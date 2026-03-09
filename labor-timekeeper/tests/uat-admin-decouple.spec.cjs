@@ -84,14 +84,14 @@ test.describe("UAT Demo - Weekly Payroll Policy + Weekly Preview", () => {
         page.locator('button:has-text("Print Payroll")').click(),
       ]);
       await popup.waitForLoadState("domcontentloaded");
-      await annotate(
-        popup,
-        "AC-4",
-        "Weekly payroll print must exclude Chris Jacobi and Chris Zavesky."
-      );
       const html = await popup.content();
       expect(html).not.toContain("Chris Jacobi");
       expect(html).not.toContain("Chris Zavesky");
+      await annotate(
+        popup,
+        "AC-4",
+        "Weekly payroll print excludes admin-role employees."
+      );
       await popup.screenshot({ path: "test-results/uat-ac-4-print-no-admin.png", fullPage: true });
       await popup.close();
     });
@@ -109,4 +109,3 @@ test.describe("UAT Demo - Weekly Payroll Policy + Weekly Preview", () => {
     });
   });
 });
-
