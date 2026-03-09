@@ -68,7 +68,7 @@ jobs:
   deploy-staging:
     name: Deploy to VM Staging (1:1 runtime)
     needs: build-and-test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Validate deploy secrets
@@ -196,7 +196,7 @@ jobs:
   uat-demo:
     name: UAT Demo (VM Staging via SSH Tunnel)
     needs: deploy-staging
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
       HUSKY: "0"
@@ -301,7 +301,7 @@ jobs:
   uat-approval:
     name: UAT Approval Gate
     needs: uat-demo
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: uat-approval
     steps:
@@ -311,7 +311,7 @@ jobs:
   promote:
     name: Deploy to VM + Caddy Prod
     needs: uat-approval
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: production
     steps:
