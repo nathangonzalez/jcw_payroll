@@ -14,9 +14,10 @@ import { getOpenAI } from "./lib/openai.js";
 import { buildMonthlyWorkbook } from "./lib/export_excel.js";
 import { generateWeeklyExports } from "./lib/export/generateWeekly.js";
 import { generateMonthlyExport } from "./lib/export/generateMonthly.js";
+import { generateAdminMonthlyExport } from "./lib/export/generateAdminMonthly.js";
 import { generatePrintableReport } from "./lib/export/generatePrintable.js";
 import { getHolidaysForYear, getHolidaysInRange } from "./lib/holidays.js";
-import { getBillRate, buildBillingRatesMap } from "./lib/billing.js";
+import { getBillRate } from "./lib/billing.js";
 import { sendMonthlyReport, sendEmail } from "./lib/email.js";
 import { archiveAndClearPayroll, listArchives, restoreFromCloud, restoreFromDailySnapshot, verifyDbEntries, downloadBackupTo, scheduleBackups, scheduleDailySnapshots, snapshotDailyToCloud, backupToCloud } from "./lib/storage.js";
 import { loadSecrets } from "./lib/secrets.js";
@@ -1210,21 +1211,22 @@ app.get("/api/export/monthly", async (req, res) => {
 
 /** Billing Report - same format as monthly but with client-facing billing rates */
 app.get("/api/export/monthly-billing", async (req, res) => {
+  return res.status(410).json({ error: "Billing monthly export is disabled" });
+});
+
+/** Admin Monthly Report (template-replacement target) */
+app.get("/api/export/monthly-admin", async (req, res) => {
   try {
     const month = String(req.query.month || "").trim();
     if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: "month=YYYY-MM required" });
 
-    // Client-facing billing rates loaded from DB (employees.client_bill_rate)
-    // Previously hardcoded — now managed via DB for parity with payroll logic
-    const billingRates = buildBillingRatesMap(db);
-
-    const result = await generateMonthlyExport({ db, month, billingRates });
+    const result = await generateAdminMonthlyExport({ db, month });
     const fileBuffer = fs.readFileSync(result.filepath);
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("Content-Disposition", `attachment; filename="${result.filename}"`);
     res.send(fileBuffer);
   } catch (err) {
-    console.error(err);
+    console.error("[export/monthly-admin]", err);
     res.status(500).json({ error: String(err?.message || err) });
   }
 });
@@ -1255,18 +1257,7 @@ app.get("/api/admin/print-week", (req, res) => {
  * GET /api/admin/print-week-billing?week_start=YYYY-MM-DD
  */
 app.get("/api/admin/print-week-billing", (req, res) => {
-  try {
-    const weekStart = String(req.query.week_start || '');
-    if (!weekStart) {
-      return res.status(400).json({ error: "week_start parameter required" });
-    }
-    const html = generatePrintableReport({ db, weekStart, billingMode: true, includeAdmin: true });
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    res.send(html);
-  } catch (err) {
-    console.error("[print-week-billing]", err);
-    res.status(500).json({ error: String(err?.message || err) });
-  }
+  return res.status(410).json({ error: "Billing print preview is disabled" });
 });
 
 /** ============================================================

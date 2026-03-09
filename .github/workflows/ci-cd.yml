@@ -177,6 +177,7 @@ jobs:
       HUSKY: "0"
       UAT_DEMO: "1"
       UAT_WEEK_START: "2026-02-25"
+      UAT_STEP_PAUSE_MS: "4500"
       SERVICE_USER: ${{ secrets.VM_SERVICE_USER }}
       STAGING_REPO: ${{ secrets.VM_STAGING_DEPLOY_PATH }}
       STAGING_PORT: ${{ secrets.VM_STAGING_PORT }}

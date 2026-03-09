@@ -75,9 +75,8 @@
       </div>
       <div class="row" style="margin-top:12px; gap:8px;">
         <button id="genMonthBtn" class="primary">🛠️ Download Monthly XLSX</button>
-        <button id="genBillingBtn" class="primary" style="background:#2d8a4e">💰 Download Billing Report</button>
+        <button id="genAdminMonthBtn" class="primary" style="background:#2d8a4e">💼 Download Admin Monthly XLSX</button>
         <button onclick="printWeekTimesheets()" class="primary" style="background:#1a56db">🖨️ Print Payroll</button>
-        <button onclick="printWeekBilling()" class="primary" style="background:#0e7490">💰 Print Billing</button>
         <button id="previewMonthBtn" class="badge">📊 Preview Report</button>
       </div>
       <div id="devControls" style="display:none;">
@@ -269,7 +268,7 @@ async function init(){
 
   // Report download buttons
   el('genMonthBtn').onclick = downloadMonthly;
-  el('genBillingBtn').onclick = downloadBilling;
+  if (el('genAdminMonthBtn')) el('genAdminMonthBtn').onclick = downloadAdminMonthly;
   const previewBtn = el('previewMonthBtn'); if (previewBtn) previewBtn.onclick = previewReport;
   const seedBtn = el('seedWeeksBtn'); if (seedBtn) seedBtn.style.display = 'none';
   el('previewReconcileBtn').onclick = previewReconcile;
@@ -351,15 +350,17 @@ function printWeekTimesheets() {
 }
 
 function printWeekBilling() {
-  const weekStart = el('weekSelect')?.value || CURRENT_WEEK_START;
-  if (!weekStart) { alert('Select a week first'); return; }
-  window.open(`/api/admin/print-week-billing?week_start=${encodeURIComponent(weekStart)}`, '_blank');
+  alert('Billing print preview is disabled.');
 }
 
 async function downloadBilling() {
+  alert('Billing report export is disabled.');
+}
+
+async function downloadAdminMonthly() {
   const month = CURRENT_MONTH;
   if (!month) { alert('Missing current month'); return; }
-  window.location.href = `/api/export/monthly-billing?month=${encodeURIComponent(month)}`;
+  window.location.href = `/api/export/monthly-admin?month=${encodeURIComponent(month)}`;
 }
 
 function fmtWeekLabel(ws) {

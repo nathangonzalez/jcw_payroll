@@ -96,6 +96,27 @@ test.describe("UAT Demo - Weekly Payroll Policy + Weekly Preview", () => {
       await popup.close();
     });
 
+    await test.step("Weekly payroll is sorted from lowest pay rate to highest", async () => {
+      const [popup] = await Promise.all([
+        page.waitForEvent("popup"),
+        page.locator('button:has-text("Print Payroll")').click(),
+      ]);
+      await popup.waitForLoadState("domcontentloaded");
+      const html = await popup.content();
+      const rates = [...html.matchAll(/Rate:\s*\$(\d+(?:\.\d+)?)\/hr/g)].map((m) => Number(m[1]));
+      expect(rates.length).toBeGreaterThan(0);
+      for (let i = 1; i < rates.length; i += 1) {
+        expect(rates[i]).toBeGreaterThanOrEqual(rates[i - 1]);
+      }
+      await annotate(
+        popup,
+        "AC-6",
+        "Weekly payroll packet is ordered by pay rate: lowest to highest."
+      );
+      await popup.screenshot({ path: "test-results/uat-ac-6-sorted-by-rate.png", fullPage: true });
+      await popup.close();
+    });
+
     await test.step("Preview weekly report section", async () => {
       await page.locator("#previewMonthBtn").click();
       await expect(page.locator("#reportPreview")).toBeVisible();

@@ -30,7 +30,7 @@ export function generatePrintableReport({ db, weekStart, billingMode = false, in
     JOIN customers c ON c.id = te.customer_id
     WHERE te.work_date >= ? AND te.work_date <= ?
       AND te.status = 'APPROVED'
-    ORDER BY e.name ASC, te.work_date ASC, te.start_time ASC
+    ORDER BY COALESCE(e.default_pay_rate, e.default_bill_rate, 0) ASC, e.name ASC, te.work_date ASC, te.start_time ASC
   `).all(weekStartYmd, weekEnd);
 
   const isAdminRow = (row) => {
@@ -91,10 +91,16 @@ export function generatePrintableReport({ db, weekStart, billingMode = false, in
   <img src="/icon-192.png" alt="JCW" style="height:40px; opacity:0.8;" />
 </div>\n`;
 
-  for (const [empId, emp] of byEmployee) {
+  const employeesOrdered = [...byEmployee.entries()].map(([empId, emp]) => {
+    const first = emp.entries[0];
+    const rate = first ? rateFunc(first.employee_id, first.customer_id) : 0;
+    return { empId, ...emp, rate };
+  }).sort((a, b) => (Number(a.rate) - Number(b.rate)) || String(a.name || "").localeCompare(String(b.name || "")));
+
+  for (const emp of employeesOrdered) {
     const normalizedEntries = applyLunchNetHours(emp.entries.map((e) => ({ ...e })));
     const category = getEmployeeCategory(emp.name);
-    const rate = normalizedEntries.length > 0 ? rateFunc(normalizedEntries[0].employee_id, normalizedEntries[0].customer_id) : 0;
+    const rate = Number(emp.rate || 0);
 
     // Group entries by date
     const byDate = new Map();

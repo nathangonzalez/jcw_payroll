@@ -205,6 +205,7 @@
   - no individual employee tabs for weekly review.
 - Keep weekly crew payroll sheets independent from admin monthly salary sheet.
 - Ensure admin sheet can be generated without touching weekly payroll formulas.
+- Add dedicated endpoint `GET /api/export/monthly-admin?month=YYYY-MM`.
 - **Acceptance:** Monthly workbook contains distinct tabs/sections for Crew Weekly and Admin Monthly with no cross-coupling.
 
 ### US-5.3 ?? Formula Guardrail Test Suite
