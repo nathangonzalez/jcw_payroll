@@ -101,7 +101,7 @@ jobs:
             exit 1
           fi
 
-          sudo -u "$SERVICE_USER" bash -lc "set -euo pipefail; cd '$PROD_REPO'; git fetch origin main; if ! git cat-file -e '${SHA}^{commit}' 2>/dev/null; then echo 'Commit ${SHA} not found in repo after fetch'; exit 1; fi; if [ ! -e '$STAGING_REPO/.git' ]; then mkdir -p \"$(dirname "$STAGING_REPO")\"; git worktree add --force '$STAGING_REPO' '${SHA}'; else cd '$STAGING_REPO'; git fetch origin main; git checkout --force '${SHA}'; fi"
+          sudo -u "$SERVICE_USER" bash -lc "set -euo pipefail; cd '$PROD_REPO'; git fetch origin --prune; if ! git cat-file -e '${SHA}^{commit}' 2>/dev/null; then echo 'Commit ${SHA} not found in repo after fetch'; exit 1; fi; if [ ! -e '$STAGING_REPO/.git' ]; then mkdir -p \"$(dirname "$STAGING_REPO")\"; git worktree add --force '$STAGING_REPO' '${SHA}'; else cd '$STAGING_REPO'; git fetch origin --prune; git checkout --force '${SHA}'; fi"
 
           STAGING_APP_DIR="$STAGING_REPO/labor-timekeeper"
           STAGING_DATA_DIR="$STAGING_APP_DIR/data/staging"
@@ -263,7 +263,7 @@ jobs:
           SERVICE_NAME="${SERVICE_NAME:-labor-timekeeper}"
           LOCAL_HEALTH_URL="${LOCAL_HEALTH_URL:-http://127.0.0.1:8080/api/health}"
 
-          sudo -u "$SERVICE_USER" bash -lc "set -euo pipefail; cd '$DEPLOY_PATH'; git fetch origin main; if ! git cat-file -e '${SHA}^{commit}' 2>/dev/null; then echo 'Commit ${SHA} not found in repo after fetch'; exit 1; fi; git checkout --force '${SHA}'; cd labor-timekeeper; npm ci --omit=dev"
+          sudo -u "$SERVICE_USER" bash -lc "set -euo pipefail; cd '$DEPLOY_PATH'; git fetch origin --prune; if ! git cat-file -e '${SHA}^{commit}' 2>/dev/null; then echo 'Commit ${SHA} not found in repo after fetch'; exit 1; fi; git checkout --force '${SHA}'; cd labor-timekeeper; npm ci --omit=dev"
           sudo systemctl restart "$SERVICE_NAME"
           sleep 5
           curl -fsS "$LOCAL_HEALTH_URL"
