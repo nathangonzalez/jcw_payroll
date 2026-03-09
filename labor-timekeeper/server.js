@@ -2493,8 +2493,10 @@ app.get("/admin", (req, res) => {
 });
 
 const port = Number(process.env.PORT || 3000);
-app.listen(port, () => {
-  console.log(`Labor Timekeeper running on http://localhost:${port}`);
+const isAppEngine = Boolean(process.env.K_SERVICE || process.env.GAE_ENV);
+const host = process.env.BIND_HOST || (isAppEngine ? "0.0.0.0" : (process.env.NODE_ENV === "production" ? "127.0.0.1" : "0.0.0.0"));
+app.listen(port, host, () => {
+  console.log(`Labor Timekeeper running on http://${host}:${port}`);
 });
 
 // ── Graceful shutdown: flush DB to GCS before the instance dies ──────

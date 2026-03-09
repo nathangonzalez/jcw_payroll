@@ -2,9 +2,9 @@ name: CI/CD
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -19,8 +19,8 @@ jobs:
       - name: Setup Node.js 22 and npm cache
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
-          cache: 'npm'
+          node-version: "22"
+          cache: "npm"
           cache-dependency-path: labor-timekeeper/package-lock.json
 
       - name: Install dependencies
@@ -47,8 +47,7 @@ jobs:
         working-directory: labor-timekeeper
 
       - name: Seed test data
-        run: |
-          curl -s -X POST http://localhost:3000/api/admin/seed
+        run: curl -s -X POST http://localhost:3000/api/admin/seed
         working-directory: labor-timekeeper
 
       - name: Install Playwright browsers
@@ -62,62 +61,148 @@ jobs:
       - name: Stop webserver
         if: always()
         run: |
-          if [ -f labor-timekeeper/webserver.pid ]; then kill $(cat labor-timekeeper/webserver.pid) || true; fi
+          if [ -f labor-timekeeper/webserver.pid ]; then
+            kill "$(cat labor-timekeeper/webserver.pid)" || true
+          fi
 
-  deploy-patch:
-    name: Deploy Patch (no promote)
+  deploy-staging:
+    name: Deploy to VM Staging (1:1 runtime)
     needs: build-and-test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    env:
-      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-      GCP_SA_KEY_B64: ${{ secrets.GCP_SA_KEY_B64 }}
-    outputs:
-      version: ${{ steps.set_version.outputs.version }}
-      patch_url: ${{ steps.patch_url.outputs.url }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Write GCP key from base64 secret
+      - name: Validate deploy secrets
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
         run: |
-          printf '%s' "$GCP_SA_KEY_B64" | tr -d '\r' | base64 --decode > gcloud-key.json
+          test -n "$VM_HOST" || (echo "Missing secret: VM_HOST" && exit 1)
+          test -n "$VM_USER" || (echo "Missing secret: VM_USER" && exit 1)
+          test -n "$VM_SSH_KEY" || (echo "Missing secret: VM_SSH_KEY" && exit 1)
 
-      - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v2
+      - name: Deploy commit to staging service
+        uses: appleboy/ssh-action@v1.2.0
         with:
-          project_id: ${{ env.GCP_PROJECT_ID }}
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          port: ${{ secrets.VM_SSH_PORT != '' && secrets.VM_SSH_PORT || '22' }}
+          script_stop: true
+          command_timeout: 30m
+          script: |
+            set -euo pipefail
 
-      - name: Authenticate gcloud
-        run: gcloud auth activate-service-account --key-file=gcloud-key.json
+            SHA="${{ github.sha }}"
+            SERVICE_USER="${{ secrets.VM_SERVICE_USER }}"
+            if [ -z "$SERVICE_USER" ]; then
+              SERVICE_USER="nathan"
+            fi
+            SERVICE_GROUP="$(id -gn "$SERVICE_USER" 2>/dev/null || echo "$SERVICE_USER")"
 
-      - name: Set patch version
-        id: set_version
-        run: echo "version=p${GITHUB_RUN_ID}" >> $GITHUB_OUTPUT
+            PROD_REPO="${{ secrets.VM_DEPLOY_PATH }}"
+            if [ -z "$PROD_REPO" ]; then
+              PROD_REPO="/home/${SERVICE_USER}/dev/repos/jcw_payroll"
+            fi
 
-      - name: Deploy App Engine patch (no promote)
-        run: |
-          gcloud app deploy labor-timekeeper/app.yaml --quiet --no-promote --version "${{ steps.set_version.outputs.version }}"
+            STAGING_REPO="${{ secrets.VM_STAGING_DEPLOY_PATH }}"
+            if [ -z "$STAGING_REPO" ]; then
+              STAGING_REPO="/home/${SERVICE_USER}/dev/repos/jcw_payroll-staging"
+            fi
 
-      - name: Build patch URL
-        id: patch_url
-        run: |
-          echo "url=https://${{ steps.set_version.outputs.version }}-dot-labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com" >> $GITHUB_OUTPUT
+            STAGING_SERVICE="${{ secrets.VM_STAGING_SERVICE_NAME }}"
+            if [ -z "$STAGING_SERVICE" ]; then
+              STAGING_SERVICE="labor-timekeeper-staging"
+            fi
 
-      - name: Patch URL
-        run: echo "${{ steps.patch_url.outputs.url }}"
+            STAGING_PORT="${{ secrets.VM_STAGING_PORT }}"
+            if [ -z "$STAGING_PORT" ]; then
+              STAGING_PORT="18080"
+            fi
 
-  uat-demo-patch:
-    name: UAT Demo (Patch URL)
-    needs: deploy-patch
+            STAGING_ADMIN_SECRET="${{ secrets.STAGING_ADMIN_SECRET }}"
+            if [ -z "$STAGING_ADMIN_SECRET" ]; then
+              STAGING_ADMIN_SECRET="demo"
+            fi
+
+            if ! sudo test -d "$PROD_REPO/.git"; then
+              echo "Prod repo not found at $PROD_REPO"
+              exit 1
+            fi
+
+            sudo -u "$SERVICE_USER" bash -lc "set -euo pipefail; cd '$PROD_REPO'; git fetch origin main; if ! git cat-file -e '${SHA}^{commit}' 2>/dev/null; then echo 'Commit ${SHA} not found in repo after fetch'; exit 1; fi; if [ ! -e '$STAGING_REPO/.git' ]; then mkdir -p \"$(dirname "$STAGING_REPO")\"; git worktree add --force '$STAGING_REPO' '${SHA}'; else cd '$STAGING_REPO'; git fetch origin main; git checkout --force '${SHA}'; fi"
+
+            STAGING_APP_DIR="$STAGING_REPO/labor-timekeeper"
+            STAGING_DATA_DIR="$STAGING_APP_DIR/data/staging"
+            STAGING_ENV_FILE="$STAGING_APP_DIR/.env.staging"
+            sudo -u "$SERVICE_USER" mkdir -p "$STAGING_DATA_DIR"
+
+            if ! sudo test -f "$STAGING_ENV_FILE"; then
+              sudo -u "$SERVICE_USER" bash -lc "printf '%s\n' 'NODE_ENV=staging' 'PORT=${STAGING_PORT}' 'DATABASE_PATH=${STAGING_DATA_DIR}/app.db' 'BIND_HOST=127.0.0.1' 'ADMIN_SECRET=${STAGING_ADMIN_SECRET}' 'SKIP_CLOUD_RESTORE=1' 'DISABLE_SCHEDULED_BACKUPS=1' > '$STAGING_ENV_FILE'"
+            fi
+
+            upsert_env() {
+              key="$1"
+              value="$2"
+              if sudo grep -q "^${key}=" "$STAGING_ENV_FILE"; then
+                sudo sed -i "s#^${key}=.*#${key}=${value}#" "$STAGING_ENV_FILE"
+              else
+                echo "${key}=${value}" | sudo tee -a "$STAGING_ENV_FILE" >/dev/null
+              fi
+            }
+
+            upsert_env NODE_ENV staging
+            upsert_env PORT "$STAGING_PORT"
+            upsert_env DATABASE_PATH "${STAGING_DATA_DIR}/app.db"
+            upsert_env BIND_HOST 127.0.0.1
+            upsert_env ADMIN_SECRET "$STAGING_ADMIN_SECRET"
+            upsert_env SKIP_CLOUD_RESTORE 1
+            upsert_env DISABLE_SCHEDULED_BACKUPS 1
+
+            cat <<EOF | sudo tee "/etc/systemd/system/${STAGING_SERVICE}.service" >/dev/null
+            [Unit]
+            Description=JCW Labor Timekeeper Staging
+            After=network-online.target
+            Wants=network-online.target
+
+            [Service]
+            Type=simple
+            User=${SERVICE_USER}
+            Group=${SERVICE_GROUP}
+            WorkingDirectory=${STAGING_APP_DIR}
+            EnvironmentFile=${STAGING_ENV_FILE}
+            ExecStart=/usr/bin/node server.js
+            Restart=always
+            RestartSec=5
+            StandardOutput=journal
+            StandardError=journal
+            SyslogIdentifier=${STAGING_SERVICE}
+            NoNewPrivileges=true
+            ProtectSystem=strict
+            ReadWritePaths=${STAGING_DATA_DIR}
+            ReadWritePaths=/tmp
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            sudo -u "$SERVICE_USER" bash -lc "cd '$STAGING_APP_DIR' && npm ci --omit=dev"
+            sudo systemctl daemon-reload
+            sudo systemctl enable "$STAGING_SERVICE"
+            sudo systemctl restart "$STAGING_SERVICE"
+            sleep 4
+            curl -fsS "http://127.0.0.1:${STAGING_PORT}/api/health"
+
+  uat-demo:
+    name: UAT Demo (VM Staging via SSH Tunnel)
+    needs: deploy-staging
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     env:
       HUSKY: "0"
       UAT_DEMO: "1"
       UAT_WEEK_START: "2026-02-25"
-      BASE_URL: ${{ needs.deploy-patch.outputs.patch_url }}
-      ADMIN_SECRET_UAT: ${{ secrets.ADMIN_SECRET }}
+      BASE_URL: "http://127.0.0.1:18080"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -125,8 +210,8 @@ jobs:
       - name: Setup Node.js 22 and npm cache
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
-          cache: 'npm'
+          node-version: "22"
+          cache: "npm"
           cache-dependency-path: labor-timekeeper/package-lock.json
 
       - name: Install dependencies
@@ -136,6 +221,61 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
         working-directory: labor-timekeeper
+
+      - name: Start SSH tunnel to staging
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+          VM_SSH_PORT: ${{ secrets.VM_SSH_PORT }}
+          VM_STAGING_PORT: ${{ secrets.VM_STAGING_PORT }}
+        run: |
+          test -n "$VM_HOST" || (echo "Missing secret: VM_HOST" && exit 1)
+          test -n "$VM_USER" || (echo "Missing secret: VM_USER" && exit 1)
+          test -n "$VM_SSH_KEY" || (echo "Missing secret: VM_SSH_KEY" && exit 1)
+
+          STAGING_PORT="${VM_STAGING_PORT:-18080}"
+          SSH_PORT="${VM_SSH_PORT:-22}"
+
+          printf '%s\n' "$VM_SSH_KEY" > /tmp/vm_key
+          chmod 600 /tmp/vm_key
+
+          nohup ssh -i /tmp/vm_key \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -p "$SSH_PORT" \
+            -N \
+            -L "18080:127.0.0.1:${STAGING_PORT}" \
+            "${VM_USER}@${VM_HOST}" > /tmp/staging-tunnel.log 2>&1 &
+          echo $! > /tmp/staging-tunnel.pid
+
+      - name: Wait for staging health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS "${BASE_URL}/api/health" > /tmp/staging-health.json; then
+              cat /tmp/staging-health.json
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Staging health check failed via tunnel"
+          cat /tmp/staging-tunnel.log || true
+          exit 1
+
+      - name: Resolve UAT admin secret
+        env:
+          STAGING_ADMIN_SECRET: ${{ secrets.STAGING_ADMIN_SECRET }}
+        run: |
+          echo "ADMIN_SECRET_UAT=${STAGING_ADMIN_SECRET:-demo}" >> "$GITHUB_ENV"
+
+      - name: Seed staging UAT data
+        run: |
+          curl -fsS -X POST -H "x-admin-secret: ${ADMIN_SECRET_UAT}" "${BASE_URL}/api/admin/seed"
+          curl -fsS -X POST \
+            -H "Content-Type: application/json" \
+            -H "x-admin-secret: ${ADMIN_SECRET_UAT}" \
+            -d "{\"week_start\":\"${UAT_WEEK_START}\",\"reset\":true,\"submit\":true,\"approve\":true}" \
+            "${BASE_URL}/api/admin/simulate-week"
 
       - name: Run UAT demo spec
         run: npx playwright test tests/uat-admin-decouple.spec.cjs --project=chromium --workers=1
@@ -151,9 +291,16 @@ jobs:
             labor-timekeeper/test-results/
           retention-days: 14
 
+      - name: Stop SSH tunnel
+        if: always()
+        run: |
+          if [ -f /tmp/staging-tunnel.pid ]; then
+            kill "$(cat /tmp/staging-tunnel.pid)" || true
+          fi
+
   uat-approval:
     name: UAT Approval Gate
-    needs: uat-demo-patch
+    needs: uat-demo
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: uat-approval
@@ -162,30 +309,80 @@ jobs:
         run: echo "UAT demo reviewed and approved."
 
   promote:
-    name: Promote Patch to Prod
-    needs: [deploy-patch, uat-approval]
+    name: Deploy to VM + Caddy Prod
+    needs: uat-approval
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
-    env:
-      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-      GCP_SA_KEY_B64: ${{ secrets.GCP_SA_KEY_B64 }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Write GCP key from base64 secret
+      - name: Validate deploy secrets
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
         run: |
-          printf '%s' "$GCP_SA_KEY_B64" | tr -d '\r' | base64 --decode > gcloud-key.json
+          test -n "$VM_HOST" || (echo "Missing secret: VM_HOST" && exit 1)
+          test -n "$VM_USER" || (echo "Missing secret: VM_USER" && exit 1)
+          test -n "$VM_SSH_KEY" || (echo "Missing secret: VM_SSH_KEY" && exit 1)
 
-      - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v2
+      - name: Deploy approved commit to production service
+        uses: appleboy/ssh-action@v1.2.0
         with:
-          project_id: ${{ env.GCP_PROJECT_ID }}
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          port: ${{ secrets.VM_SSH_PORT != '' && secrets.VM_SSH_PORT || '22' }}
+          script_stop: true
+          command_timeout: 30m
+          script: |
+            set -euo pipefail
 
-      - name: Authenticate gcloud
-        run: gcloud auth activate-service-account --key-file=gcloud-key.json
+            SHA="${{ github.sha }}"
+            SERVICE_USER="${{ secrets.VM_SERVICE_USER }}"
+            if [ -z "$SERVICE_USER" ]; then
+              SERVICE_USER="nathan"
+            fi
+            DEPLOY_PATH="${{ secrets.VM_DEPLOY_PATH }}"
+            if [ -z "$DEPLOY_PATH" ]; then
+              DEPLOY_PATH="/home/${SERVICE_USER}/dev/repos/jcw_payroll"
+            fi
 
-      - name: Promote patch to prod
+            SERVICE_NAME="${{ secrets.VM_SERVICE_NAME }}"
+            if [ -z "$SERVICE_NAME" ]; then
+              SERVICE_NAME="labor-timekeeper"
+            fi
+
+            LOCAL_HEALTH_URL="${{ secrets.VM_LOCAL_HEALTH_URL }}"
+            if [ -z "$LOCAL_HEALTH_URL" ]; then
+              LOCAL_HEALTH_URL="http://127.0.0.1:8080/api/health"
+            fi
+
+            sudo -u "$SERVICE_USER" bash -lc "set -euo pipefail; cd '$DEPLOY_PATH'; git fetch origin main; if ! git cat-file -e '${SHA}^{commit}' 2>/dev/null; then echo 'Commit ${SHA} not found in repo after fetch'; exit 1; fi; git checkout --force '${SHA}'; cd labor-timekeeper; npm ci --omit=dev"
+            sudo systemctl restart "$SERVICE_NAME"
+            sleep 5
+            curl -fsS "$LOCAL_HEALTH_URL"
+
+            BINDINGS="$(ss -ltn sport = :8080 | awk 'NR>1 {print $4}')"
+            echo "Port 8080 bindings: ${BINDINGS}"
+            if echo "$BINDINGS" | grep -Eq '(^127\.0\.0\.1:8080$|^\[::1\]:8080$)'; then
+              echo "OK: service bound to loopback"
+            else
+              echo "ERROR: expected loopback-only bind on :8080"
+              exit 1
+            fi
+
+      - name: Verify public production domain health
+        env:
+          PROD_HEALTH_URL: ${{ vars.PAYROLL_PROD_HEALTH_URL }}
         run: |
-          gcloud app services set-traffic labor-timekeeper --splits "${{ needs.deploy-patch.outputs.version }}=1"
+          URL="${PROD_HEALTH_URL:-https://payroll.jcwelton.com/api/health}"
+          echo "Checking ${URL}"
+          for i in $(seq 1 20); do
+            if curl -fsS "$URL" > /tmp/prod-health.json; then
+              cat /tmp/prod-health.json
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Health check failed for ${URL}"
+          exit 1

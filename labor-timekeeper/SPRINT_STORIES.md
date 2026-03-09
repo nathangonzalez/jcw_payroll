@@ -244,6 +244,26 @@
 - Keep an admin-safe mapping/alias layer so legacy imports with old names still resolve correctly.
 - **Acceptance:** App dropdown shows one Tubergen entry and one `JCW, Office, Shop` option; payroll/billing exports aggregate correctly without duplicate customer lines.
 
+### US-5.9 ?? Voice Coding Spike: Aider + `--voice`
+- Install and configure Aider for this repo with voice mode enabled.
+- Validate end-to-end flow:
+  - mic input -> Whisper transcription -> LLM coding action -> file change in repo.
+- Add runbook for daily use (recommended flags, model settings, safe usage boundaries).
+- Add a short UAT demo script showing one spoken coding task from prompt to diff.
+- **Acceptance:** Nate can complete one real code edit via voice-only interaction using Aider and review resulting diff before commit.
+
+### US-5.10 ?? Voice Coding Spike: Custom Node Voice Agent
+- Build a small Node.js voice coding prototype:
+  - capture mic audio
+  - transcribe with Whisper API
+  - send instruction + repo context to LLM
+  - apply/edit files in local workspace
+- Include guardrails:
+  - dry-run mode (show proposed diff only)
+  - explicit apply confirmation step
+  - audit log of prompt, model, and changed files.
+- **Acceptance:** Prototype can run one spoken coding command and produce a reviewable patch with confirmation before write/apply.
+
 ---
 
 ## Current Production Status
