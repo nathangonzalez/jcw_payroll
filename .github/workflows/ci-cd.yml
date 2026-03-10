@@ -163,8 +163,18 @@ jobs:
           sudo systemctl daemon-reload
           sudo systemctl enable "$STAGING_SERVICE"
           sudo systemctl restart "$STAGING_SERVICE"
-          sleep 4
-          curl -fsS "http://127.0.0.1:${STAGING_PORT}/api/health"
+          ok=0
+          for i in $(seq 1 60); do
+            if curl -fsS "http://127.0.0.1:${STAGING_PORT}/api/health"; then
+              ok=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ok" != "1" ]; then
+            sudo journalctl -u "$STAGING_SERVICE" -n 120 --no-pager || true
+            exit 1
+          fi
 
           echo "STAGING_APP_DIR=$STAGING_APP_DIR" >> "$GITHUB_ENV"
           echo "STAGING_PORT=$STAGING_PORT" >> "$GITHUB_ENV"
