@@ -311,16 +311,16 @@ test.describe("Admin Reports & Exports", () => {
     const today = new Date();
     const month = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
     const resp = await request.get(`${BASE_URL}/api/export/monthly?month=${month}`);
-    // May return 200 with file or error if no data — just verify no crash
-    expect([200, 400, 404, 500]).toContain(resp.status());
+    // Legacy monthly export is disabled; endpoint should fail cleanly.
+    expect([410, 400, 404, 500]).toContain(resp.status());
   });
 
   test("GET /api/export/monthly-billing downloads billing Excel", async ({ request }) => {
     const today = new Date();
     const month = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
     const resp = await request.get(`${BASE_URL}/api/export/monthly-billing?month=${month}`);
-    // May return 200 with file or error if no data — just verify no crash
-    expect([200, 400, 404, 500]).toContain(resp.status());
+    // Billing export is disabled; endpoint should fail cleanly.
+    expect([410, 400, 404, 500]).toContain(resp.status());
   });
 
   test("GET /api/admin/archives returns archives list", async ({ request }) => {

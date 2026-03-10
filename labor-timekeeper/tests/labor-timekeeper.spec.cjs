@@ -112,7 +112,7 @@ test.describe("Labor Timekeeper - Admin Page", () => {
   });
 
   test("admin page shows report button", async ({ page }) => {
-    await expect(page.locator("#genMonthBtn")).toBeVisible();
+    await expect(page.locator("#genWeekBtn")).toBeVisible();
   });
 
   test("admin can simulate full month", async ({ request }) => {

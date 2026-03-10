@@ -74,8 +74,8 @@
         </div>
       </div>
       <div class="row" style="margin-top:12px; gap:8px;">
-        <button id="genMonthBtn" class="primary">🛠️ Download Monthly XLSX</button>
-        <button id="genAdminMonthBtn" class="primary" style="background:#2d8a4e">💼 Download Admin Monthly XLSX</button>
+        <button id="genWeekBtn" class="primary">Download Weekly XLSX</button>
+        <button id="genAdminMonthBtn" class="primary" style="background:#2d8a4e">Download Monthly XLSX (Admin Only)</button>
         <button onclick="printWeekTimesheets()" class="primary" style="background:#1a56db">🖨️ Print Payroll</button>
         <button id="previewMonthBtn" class="badge">📊 Preview Report</button>
       </div>
@@ -274,7 +274,7 @@ async function init(){
   }
 
   // Report download buttons
-  el('genMonthBtn').onclick = downloadMonthly;
+  if (el('genWeekBtn')) el('genWeekBtn').onclick = downloadWeekly;
   if (el('genAdminMonthBtn')) el('genAdminMonthBtn').onclick = downloadAdminMonthly;
   const previewBtn = el('previewMonthBtn'); if (previewBtn) previewBtn.onclick = previewReport;
   const seedBtn = el('seedWeeksBtn'); if (seedBtn) seedBtn.style.display = 'none';
@@ -343,10 +343,19 @@ async function seedSampleWeeks(){
 }
 
 // Report download functions
-async function downloadMonthly() {
-  const month = CURRENT_MONTH;
-  if (!month) { alert('Missing current month'); return; }
-  window.location.href = withBase(`/api/export/monthly?month=${encodeURIComponent(month)}`);
+async function downloadWeekly() {
+  const weekStart = el('weekSelect')?.value || CURRENT_WEEK_START;
+  if (!weekStart) { alert('Select a week first'); return; }
+  try {
+    const result = await api(`/api/admin/generate-week?week_start=${encodeURIComponent(weekStart)}`);
+    const file = (result.files || [])[0];
+    if (!file?.filename) throw new Error('No weekly workbook returned');
+    const month = weekStart.slice(0, 7);
+    const url = withBase(`/exports/${encodeURIComponent(month)}/${encodeURIComponent(weekStart)}/${encodeURIComponent(file.filename)}`);
+    window.location.href = url;
+  } catch (err) {
+    alert(`Weekly export failed: ${err.message}`);
+  }
 }
 
 function printWeekTimesheets() {

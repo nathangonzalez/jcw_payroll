@@ -13,7 +13,6 @@ import { transcribeAudio, parseVoiceCommand } from "./lib/voice.js";
 import { getOpenAI } from "./lib/openai.js";
 import { buildMonthlyWorkbook } from "./lib/export_excel.js";
 import { generateWeeklyExports } from "./lib/export/generateWeekly.js";
-import { generateMonthlyExport } from "./lib/export/generateMonthly.js";
 import { generateAdminMonthlyExport } from "./lib/export/generateAdminMonthly.js";
 import { generatePrintableReport } from "./lib/export/generatePrintable.js";
 import { getHolidaysForYear, getHolidaysInRange } from "./lib/holidays.js";
@@ -118,12 +117,15 @@ if (process.env.NODE_ENV !== 'production') {
 
 // ── Hardened cold-start restore: retry + snapshot fallback + verification ──
 let _restoreOk = false;
-if (process.env.NODE_ENV === 'production') {
+const shouldAttemptCloudRestore =
+  process.env.NODE_ENV === 'production' || process.env.ALLOW_CLOUD_RESTORE === '1';
+if (shouldAttemptCloudRestore) {
   // VM persistent storage: skip cloud restore if local DB already has data.
   // On App Engine /tmp is ephemeral so localEntries will always be 0 → restore runs.
   // On a VM with persistent disk, the DB survives restarts → no re-download needed.
   const localEntries = verifyDbEntries(DB_PATH);
-  if (localEntries > 0 || process.env.SKIP_CLOUD_RESTORE === '1') {
+  const forceCloudRestore = process.env.FORCE_CLOUD_RESTORE === '1';
+  if (((localEntries > 0) && !forceCloudRestore) || process.env.SKIP_CLOUD_RESTORE === '1') {
     console.log(`[startup] Local DB has ${localEntries} entries — skipping cloud restore`);
     _restoreOk = true;
   }
@@ -437,8 +439,8 @@ function getWeekStartsForMonthByWeekEnd(month) {
 
 function buildStressSampleEntries() {
   const employees = [
-    { name: 'Chris Jacobi', role: 'admin', customers: ['JCW'] },
-    { name: 'Chris Zavesky', role: 'admin', customers: ['JCW'] },
+    { name: 'Chris Jacobi', role: 'admin', customers: ['Hall', 'Boyle', 'Lynn', 'Watkins', 'JCW'] },
+    { name: 'Chris Zavesky', role: 'admin', customers: ['Landy', 'Null', 'Tubergen', 'Ueltschi', 'PTO'] },
     { name: 'Doug Kinsey', role: 'hourly', customers: ['Hall', 'Richer', 'Lucas', 'Howard'] },
     { name: 'Jason Green', role: 'hourly', customers: ['Hall', 'Richer', 'Lucas', 'Howard'] },
     { name: 'Boban Abbate', role: 'hourly', customers: ['Boyle', 'Campbell', 'Hall', 'Howard'] },
@@ -450,9 +452,12 @@ function buildStressSampleEntries() {
   const entries = [];
   for (const emp of employees) {
     if (emp.role === 'admin') {
-      // Admin template: 8 hours Wed-Fri + Mon-Tue on a single client
-      for (const dayOffset of [0, 1, 2, 5, 6]) {
-        entries.push({ employee: emp.name, customer: emp.customers[0], hours: 8, dayOffset, notes: '' });
+      // Admin template: seed multiple customers to validate customer + employee + rate summary
+      const adminDays = [0, 1, 2, 5, 6];
+      for (let i = 0; i < adminDays.length; i += 1) {
+        const dayOffset = adminDays[i];
+        const customer = emp.customers[i % emp.customers.length];
+        entries.push({ employee: emp.name, customer, hours: 8, dayOffset, notes: 'Admin seeded hours' });
       }
       continue;
     }
@@ -1203,22 +1208,7 @@ app.post("/api/voice/command", upload.single("audio"), async (req, res) => {
 
 /** Exports - no auth for simplicity */
 app.get("/api/export/monthly", async (req, res) => {
-  try {
-    const month = String(req.query.month || "").trim(); // YYYY-MM
-    if (!/^\d{4}-\d{2}$/.test(month)) return res.status(400).json({ error: "month=YYYY-MM required" });
-
-    // Use the new generateMonthlyExport which has correct vertical format
-    const result = await generateMonthlyExport({ db, month });
-    
-    // Read the generated file and send it
-    const fileBuffer = fs.readFileSync(result.filepath);
-    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    res.setHeader("Content-Disposition", `attachment; filename="${result.filename}"`);
-    res.send(fileBuffer);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: String(err?.message || err) });
-  }
+  return res.status(410).json({ error: "Legacy monthly export is disabled. Use /api/export/monthly-admin" });
 });
 
 /** Billing Report - same format as monthly but with client-facing billing rates */
@@ -1334,7 +1324,7 @@ app.get("/api/admin/generate-month", async (req, res) => {
       return res.status(400).json({ error: "month=YYYY-MM required" });
     }
 
-    const result = await generateMonthlyExport({ db, month });
+    const result = await generateAdminMonthlyExport({ db, month });
     res.json({
       ok: true,
       month,
@@ -2214,8 +2204,8 @@ app.post("/api/admin/email-report", async (req, res) => {
       return res.status(400).json({ error: "month required in YYYY-MM format" });
     }
     
-    // Generate the report
-    const result = await generateMonthlyExport({ db, month });
+    // Generate admin-only monthly report
+    const result = await generateAdminMonthlyExport({ db, month });
     
     // Send via email
     await sendMonthlyReport({

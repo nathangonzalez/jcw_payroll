@@ -109,7 +109,7 @@ jobs:
           sudo -u "$SERVICE_USER" mkdir -p "$STAGING_DATA_DIR"
 
           if ! sudo test -f "$STAGING_ENV_FILE"; then
-            sudo -u "$SERVICE_USER" bash -lc "printf '%s\n' 'NODE_ENV=staging' 'PORT=${STAGING_PORT}' 'DATABASE_PATH=${STAGING_DATA_DIR}/app.db' 'BIND_HOST=127.0.0.1' 'ADMIN_SECRET=${STAGING_ADMIN_SECRET}' 'SKIP_CLOUD_RESTORE=1' 'DISABLE_SCHEDULED_BACKUPS=1' > '$STAGING_ENV_FILE'"
+            sudo -u "$SERVICE_USER" bash -lc "printf '%s\n' 'NODE_ENV=staging' 'PORT=${STAGING_PORT}' 'DATABASE_PATH=${STAGING_DATA_DIR}/app.db' 'BIND_HOST=127.0.0.1' 'ADMIN_SECRET=${STAGING_ADMIN_SECRET}' 'ALLOW_CLOUD_RESTORE=1' 'FORCE_CLOUD_RESTORE=1' 'SKIP_CLOUD_RESTORE=0' 'DISABLE_SCHEDULED_BACKUPS=1' > '$STAGING_ENV_FILE'"
           fi
 
           upsert_env() {
@@ -127,7 +127,9 @@ jobs:
           upsert_env DATABASE_PATH "${STAGING_DATA_DIR}/app.db"
           upsert_env BIND_HOST 127.0.0.1
           upsert_env ADMIN_SECRET "$STAGING_ADMIN_SECRET"
-          upsert_env SKIP_CLOUD_RESTORE 1
+          upsert_env ALLOW_CLOUD_RESTORE 1
+          upsert_env FORCE_CLOUD_RESTORE 1
+          upsert_env SKIP_CLOUD_RESTORE 0
           upsert_env DISABLE_SCHEDULED_BACKUPS 1
 
           cat <<EOF | sudo tee "/etc/systemd/system/${STAGING_SERVICE}.service" >/dev/null
