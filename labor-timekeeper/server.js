@@ -1046,7 +1046,7 @@ app.get("/api/admin/report-preview", (req, res) => {
     })();
 
     const rows = db.prepare(`
-      SELECT te.*, e.name as employee_name, c.name as customer_name
+      SELECT te.*, e.name as employee_name, e.role as employee_role, e.is_admin as employee_is_admin, c.name as customer_name
       FROM time_entries te
       JOIN employees e ON e.id = te.employee_id
       JOIN customers c ON c.id = te.customer_id
@@ -1055,12 +1055,21 @@ app.get("/api/admin/report-preview", (req, res) => {
       ORDER BY te.work_date ASC, e.name ASC
     `).all(rangeStart, rangeEnd);
 
+    const isAdminRow = (r) => {
+      const role = String(r.employee_role || '').toLowerCase();
+      if (role === 'admin') return true;
+      if (Number(r.employee_is_admin || 0) === 1) return true;
+      const name = String(r.employee_name || '').toLowerCase();
+      return name === 'chris jacobi' || name === 'chris zavesky' || name === 'chris z';
+    };
+
     const perEmployee = new Map();
     const perEmpDate = new Map();
     let totalHours = 0;
     let totalBilled = 0;
     let totalEntries = 0;
     for (const r of rows) {
+      if (isAdminRow(r)) continue;
       const weekStart = weekStartYMD(ymdToDate(r.work_date));
       if (!weekSet.has(weekStart)) continue;
       const isLunch = String(r.customer_name || '').toLowerCase() === 'lunch' || String(r.notes || '').toLowerCase().includes('lunch');
@@ -1107,9 +1116,12 @@ app.get("/api/admin/report-preview", (req, res) => {
         const custKey = r.customer_name;
         if (!custMap.has(custKey)) custMap.set(custKey, new Map());
         const empMap = custMap.get(custKey);
-        if (!empMap.has(r.employee_id)) empMap.set(r.employee_id, { employee_name: bucket.employee_name, hours: 0, billed: 0 });
+        if (!empMap.has(r.employee_id)) {
+          const rate = getBillRate(db, r.employee_id, r.customer_id);
+          empMap.set(r.employee_id, { employee_name: bucket.employee_name, hours: 0, billed: 0, rate });
+        }
         const emp = empMap.get(r.employee_id);
-        const rate = getBillRate(db, r.employee_id, r.customer_id);
+        const rate = Number(emp.rate || getBillRate(db, r.employee_id, r.customer_id));
         emp.hours += Number(r.hours || 0);
         emp.billed += Number(r.hours || 0) * rate;
       }
@@ -1121,12 +1133,12 @@ app.get("/api/admin/report-preview", (req, res) => {
         const customers = [...custMap.entries()]
           .sort((a, b) => a[0].localeCompare(b[0]))
           .map(([custName, empMap]) => {
-            const employees = [...empMap.values()].sort((a, b) => a.employee_name.localeCompare(b.employee_name));
+            const employees = [...empMap.values()].sort((a, b) => (Number(a.rate || 0) - Number(b.rate || 0)) || a.employee_name.localeCompare(b.employee_name));
             const custHours = employees.reduce((s, e) => s + e.hours, 0);
             const custBilled = employees.reduce((s, e) => s + e.billed, 0);
             weekHours += custHours;
             weekBilled += custBilled;
-            return { customer: custName, hours: round2(custHours), billed: round2(custBilled), employees: employees.map(e => ({ ...e, hours: round2(e.hours), billed: round2(e.billed) })) };
+            return { customer: custName, hours: round2(custHours), billed: round2(custBilled), employees: employees.map(e => ({ ...e, rate: round2(e.rate || 0), hours: round2(e.hours), billed: round2(e.billed) })) };
           });
         return { weekStart: ws, hours: round2(weekHours), billed: round2(weekBilled), customers };
       });
