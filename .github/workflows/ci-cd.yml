@@ -128,6 +128,10 @@ jobs:
       UAT_WEEK_START: "2026-02-25"
       BASE_URL: https://p${{ github.run_id }}-dot-labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com
       ADMIN_SECRET_UAT: ${{ secrets.ADMIN_SECRET }}
+      UAT_STEP_PAUSE_MS: "6500"
+      UAT_SCROLL_STEP_PX: "200"
+      UAT_SCROLL_PAUSE_MS: "1000"
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
