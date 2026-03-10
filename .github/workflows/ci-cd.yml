@@ -63,6 +63,10 @@ jobs:
         run: npx playwright test tests/ci-smoke.spec.cjs --project=chromium --workers=1
         working-directory: labor-timekeeper
 
+      - name: Run admin monthly formula stress gate
+        run: npx playwright test tests/admin-monthly-formulas.stress.spec.cjs --project=chromium --workers=1
+        working-directory: labor-timekeeper
+
       - name: Stop webserver
         if: always()
         run: |
