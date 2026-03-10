@@ -4,8 +4,8 @@
  * Designed for one-click printing with proper page breaks.
  */
 
-import { getBillRate } from "../billing.js";
-import { getEmployeeCategory, splitEntriesWithOT, calculatePayWithOT } from "../classification.js";
+import { getBillRate, getClientBillRate } from "../billing.js";
+import { getEmployeeCategory, calculatePayWithOT } from "../classification.js";
 import { weekDates, weekStartYMD, ymdToDate } from "../time.js";
 
 /**
@@ -13,36 +13,54 @@ import { weekDates, weekStartYMD, ymdToDate } from "../time.js";
  * @param {Object} options
  * @param {Database} options.db
  * @param {string} options.weekStart - YYYY-MM-DD
+ * @param {boolean} [options.billingMode=false] - Use client billing rates instead of payroll rates
+ * @param {boolean} [options.includeAdmin=false] - Include admin employees in payroll weekly print
  * @returns {string} HTML string
  */
-export function generatePrintableReport({ db, weekStart }) {
+export function generatePrintableReport({ db, weekStart, billingMode = false, includeAdmin = false }) {
   const normalizedWeekStart = weekStartYMD(ymdToDate(weekStart));
   const { ordered } = weekDates(normalizedWeekStart);
   const weekStartYmd = ordered[0].ymd;
   const weekEnd = ordered[6].ymd;
 
   const entries = db.prepare(`
-    SELECT te.*, e.name as employee_name, e.is_admin, c.name as customer_name
+    SELECT te.*, e.name as employee_name, e.role, e.is_admin, c.name as customer_name
     FROM time_entries te
     JOIN employees e ON e.id = te.employee_id
     JOIN customers c ON c.id = te.customer_id
     WHERE te.work_date >= ? AND te.work_date <= ?
       AND te.status = 'APPROVED'
-    ORDER BY e.name ASC, te.work_date ASC, te.start_time ASC
+    ORDER BY COALESCE(e.default_pay_rate, e.default_bill_rate, 0) ASC, e.name ASC, te.work_date ASC, te.start_time ASC
   `).all(weekStartYmd, weekEnd);
+
+  const isAdminRow = (row) => {
+    const role = String(row?.role || "").toLowerCase();
+    if (role === "admin") return true;
+    if (Number(row?.is_admin || 0) === 1) return true;
+    return getEmployeeCategory(String(row?.employee_name || "")) === "admin";
+  };
+  const effectiveIncludeAdmin = billingMode ? true : includeAdmin;
+  const scopedEntries = effectiveIncludeAdmin
+    ? entries
+    : entries.filter((row) => !isAdminRow(row));
 
   // Group by employee
   const byEmployee = new Map();
-  for (const row of entries) {
+  for (const row of scopedEntries) {
     if (!byEmployee.has(row.employee_id)) {
       byEmployee.set(row.employee_id, { name: row.employee_name, is_admin: row.is_admin, entries: [] });
     }
     byEmployee.get(row.employee_id).entries.push(row);
   }
 
+  const reportType = billingMode ? 'Billing' : 'Payroll';
+  const rateFunc = billingMode
+    ? (empId, custId) => getClientBillRate(db, empId, custId)
+    : (empId, custId) => getBillRate(db, empId, custId);
+
   const weekLabel = `${fmtDate(weekStartYmd)} - ${fmtDate(weekEnd)}`;
   let html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-<title>Payroll Report — ${weekLabel}</title>
+<title>${reportType} Report — ${weekLabel}</title>
 <style>
   @page { size: landscape; margin: 0.4in; }
   @media print { .page-break { page-break-after: always; } .no-print { display: none !important; } }
@@ -73,13 +91,20 @@ export function generatePrintableReport({ db, weekStart }) {
   <img src="/icon-192.png" alt="JCW" style="height:40px; opacity:0.8;" />
 </div>\n`;
 
-  for (const [empId, emp] of byEmployee) {
+  const employeesOrdered = [...byEmployee.entries()].map(([empId, emp]) => {
+    const first = emp.entries[0];
+    const rate = first ? rateFunc(first.employee_id, first.customer_id) : 0;
+    return { empId, ...emp, rate };
+  }).sort((a, b) => (Number(a.rate) - Number(b.rate)) || String(a.name || "").localeCompare(String(b.name || "")));
+
+  for (const emp of employeesOrdered) {
+    const normalizedEntries = applyLunchNetHours(emp.entries.map((e) => ({ ...e })));
     const category = getEmployeeCategory(emp.name);
-    const rate = emp.entries.length > 0 ? getBillRate(db, emp.entries[0].employee_id, emp.entries[0].customer_id) : 0;
+    const rate = Number(emp.rate || 0);
 
     // Group entries by date
     const byDate = new Map();
-    for (const e of emp.entries) {
+    for (const e of normalizedEntries) {
       if (!byDate.has(e.work_date)) byDate.set(e.work_date, []);
       byDate.get(e.work_date).push(e);
     }
@@ -87,10 +112,10 @@ export function generatePrintableReport({ db, weekStart }) {
     // Build client summary
     const clientSummary = new Map();
     let totalWorkHours = 0;
-    for (const e of emp.entries) {
+    for (const e of normalizedEntries) {
       if (isLunch(e)) continue;
       const key = e.customer_name;
-      if (!clientSummary.has(key)) clientSummary.set(key, { hours: 0, rate: getBillRate(db, e.employee_id, e.customer_id) });
+      if (!clientSummary.has(key)) clientSummary.set(key, { hours: 0, rate: rateFunc(e.employee_id, e.customer_id) });
       clientSummary.get(key).hours += Number(e.hours || 0);
       totalWorkHours += Number(e.hours || 0);
     }
@@ -118,7 +143,7 @@ export function generatePrintableReport({ db, weekStart }) {
 
       const workEntries = dayEntries.filter(e => !isLunch(e));
       const lunchEntry = dayEntries.find(isLunch);
-      const lunchHours = lunchEntry ? Number(lunchEntry.hours || 0) : 0;
+      const lunchHours = lunchEntry ? Number((lunchEntry.raw_hours ?? lunchEntry.hours) || 0) : 0;
       let dayTotal = 0;
 
       for (let i = 0; i < workEntries.length; i++) {
@@ -178,6 +203,80 @@ export function generatePrintableReport({ db, weekStart }) {
 
 function isLunch(e) {
   return (e.customer_name || '').toLowerCase() === 'lunch' || (e.notes || '').toLowerCase().includes('lunch');
+}
+
+function parseTimeToHours(t) {
+  if (!t || typeof t !== 'string') return null;
+  const [hStr, mStr] = t.split(':');
+  const h = Number(hStr);
+  const m = Number(mStr);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+  return h + (m / 60);
+}
+
+function applyLunchNetHours(entries) {
+  for (const e of entries) {
+    const raw = Number(e.hours || 0);
+    e.raw_hours = raw;
+    if (isLunch(e)) e.hours = 0;
+  }
+
+  const byDate = new Map();
+  for (const e of entries) {
+    if (!byDate.has(e.work_date)) byDate.set(e.work_date, []);
+    byDate.get(e.work_date).push(e);
+  }
+
+  for (const dayEntries of byDate.values()) {
+    const lunchEntry = dayEntries.find(isLunch);
+    const lunchHours = lunchEntry ? Number(lunchEntry.raw_hours || 0) : 0;
+    if (!lunchHours) continue;
+
+    const lunchStart = lunchEntry ? parseTimeToHours(lunchEntry.start_time) : null;
+    const lunchEnd = lunchEntry ? parseTimeToHours(lunchEntry.end_time) : null;
+    const workEntries = dayEntries.filter((e) => !isLunch(e));
+    const ordered = [...workEntries].sort((a, b) => {
+      const aStart = parseTimeToHours(a.start_time);
+      const bStart = parseTimeToHours(b.start_time);
+      if (aStart != null && bStart != null) return aStart - bStart;
+      if (aStart != null) return -1;
+      if (bStart != null) return 1;
+      return 0;
+    });
+
+    if (!ordered.length) continue;
+
+    let lunchApplied = false;
+    if (lunchStart == null && lunchEnd == null) {
+      const first = ordered[0];
+      first.hours = Math.max(0, round2(Number(first.raw_hours || 0) - lunchHours));
+      lunchApplied = true;
+    }
+
+    for (let i = 0; i < ordered.length; i += 1) {
+      const entry = ordered[i];
+      let netHours = Number(entry.raw_hours || 0);
+      const timeStart = parseTimeToHours(entry.start_time);
+      const timeOut = parseTimeToHours(entry.end_time);
+      const spansLunch = (
+        lunchStart != null &&
+        lunchEnd != null &&
+        timeStart != null &&
+        timeOut != null &&
+        timeStart <= lunchStart &&
+        timeOut >= lunchEnd
+      );
+      const afterLunch = lunchStart != null && timeStart != null && timeStart >= lunchStart;
+      const applyLunch = !lunchApplied && (spansLunch || afterLunch || (lunchStart == null && timeStart != null && timeStart >= 12) || i === ordered.length - 1);
+      if (applyLunch) {
+        netHours = Math.max(0, round2(netHours - lunchHours));
+        lunchApplied = true;
+      }
+      entry.hours = netHours;
+    }
+  }
+
+  return entries;
 }
 
 function round2(n) { return Math.round(Number(n) * 100) / 100; }

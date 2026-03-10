@@ -8,6 +8,10 @@ const DB_BACKUP_NAME = process.env.DB_BACKUP_NAME || 'app.db';
 const ARCHIVE_FOLDER = 'archives';
 const DAILY_SNAPSHOT_FOLDER = 'backups/daily';
 
+function canReadCloudBackup() {
+  return process.env.NODE_ENV === 'production' || process.env.ALLOW_CLOUD_RESTORE === '1';
+}
+
 let storage;
 
 function getStorage() {
@@ -194,7 +198,7 @@ export async function listArchives() {
  * @returns {Promise<boolean>} - true if restored, false if no backup exists
  */
 export async function restoreFromCloud(dbPath) {
-  if (process.env.NODE_ENV !== 'production') {
+  if (!canReadCloudBackup()) {
     console.log('[storage] Skipping cloud restore in non-production');
     return false;
   }
@@ -328,7 +332,7 @@ export async function backupToCloud(dbPath) {
  * @returns {Promise<boolean>}
  */
 export async function downloadBackupTo(destPath) {
-  if (process.env.NODE_ENV !== 'production') {
+  if (!canReadCloudBackup()) {
     console.log('[storage] Skipping cloud download in non-production');
     return false;
   }

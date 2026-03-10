@@ -11,6 +11,7 @@ instance_class: F1
 env_variables:
   NODE_ENV: "production"
   DATABASE_PATH: "/tmp/app.db"
+  BIND_HOST: "0.0.0.0"
   GCS_BUCKET: "jcw-labor-timekeeper"
   DB_BACKUP_NAME: "app.db"
   DB_BACKUP_ALIASES: "restored_app.db"

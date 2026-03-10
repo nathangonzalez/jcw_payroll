@@ -338,6 +338,13 @@ export async function generateMonthlyExport({ db, month, billingRates }) {
   let adminEndRow = null;
 
   for (const cust of customers) {
+    // Determine which employees go where
+    const emps = [...cust.employees.values()].sort((a,b) => a.name.localeCompare(b.name));
+    const hourlyEmps = emps.filter(e => (e.category || '').toLowerCase() !== 'admin');
+    const adminEmps = emps.filter(e => (e.category || '').toLowerCase() === 'admin');
+
+    if (hourlyEmps.length === 0 && adminEmps.length === 0) continue;
+
     // Customer header: left and right
     const ch = monthlySheet.addRow([cust.name]);
     ch.font = { bold: true };
@@ -345,57 +352,89 @@ export async function generateMonthlyExport({ db, month, billingRates }) {
     monthlySheet.mergeCells(ch.number, 1, ch.number, 5);
     monthlySheet.mergeCells(ch.number, 7, ch.number, 11);
 
-    const emps = [...cust.employees.values()].sort((a,b) => a.name.localeCompare(b.name));
-    for (const e of emps) {
-      const rate = getRate(e.empId, cust.custId, e.name);
-      const amount = round2(e.hours * rate);
-      // Build SUM formula across weekly sheets for this cust/emp combo
-      const posKey = `${cust.custId}::${e.empId}`;
-      const weekRefs = weeklyTotals
-        .filter(w => w.cellPositions && w.cellPositions.has(posKey))
-        .map(w => {
-          const pos = w.cellPositions.get(posKey);
-          return `'${w.sheetName}'!${pos.col}${pos.row}`;
-        });
-      const sumFormula = weekRefs.length > 0 ? weekRefs.join('+') : null;
+    const maxRows = Math.max(hourlyEmps.length, adminEmps.length);
+    for (let i = 0; i < maxRows; i++) {
+      const hEmp = hourlyEmps[i];
+      const aEmp = adminEmps[i];
+      
+      const rowVals = ['', '', '', '', '', '', '', '', '', '', ''];
+      
+      let hasData = false;
+      
+      if (hEmp) {
+        const rate = getRate(hEmp.empId, cust.custId, hEmp.name);
+        const amount = round2(hEmp.hours * rate);
+        // Build SUM formula across weekly sheets for this cust/emp combo
+        const posKey = `${cust.custId}::${hEmp.empId}`;
+        const weekRefs = weeklyTotals
+          .filter(w => w.cellPositions && w.cellPositions.has(posKey))
+          .map(w => {
+            const pos = w.cellPositions.get(posKey);
+            return `'${w.sheetName}'!${pos.col}${pos.row}`;
+          });
+        const sumFormula = weekRefs.length > 0 ? weekRefs.join('+') : null;
 
-      if ((e.category || '').toLowerCase() === 'admin') {
-        // place in admin columns (G=7, H=8, I=9, J=10, K=11)
-        const r = monthlySheet.addRow(['', '', '', '', '', '', '', e.name, rate, round2(e.hours), ""]);
-        // Live formula: SUMIF per-customer hours from each weekly employee timesheet
-        // Employee timesheets have: Col I = client name, Col J = hours (SUMIF per client)
-        // We use SUMIF to pull only THIS customer's hours, not the employee total (J21).
-        const custNameEscaped = (cust.name || '').replace(/"/g, '""');
-        const adminEmpRefs = [];
-        for (const wkStart of sortedWeeks) {
-          const weekMap = perWeekEmpSheetMap.get(wkStart);
-          const posMap = perWeekEmpPositions.get(wkStart);
-          if (weekMap && weekMap.has(e.empId)) {
-            const sName = weekMap.get(e.empId);
-            const pos = posMap ? posMap.get(e.empId) : null;
-            const sStart = pos ? pos.summaryStart : 3;
-            const sEnd = pos ? pos.summaryEnd : 21;
-            adminEmpRefs.push(`SUMIF('${sName}'!$I$${sStart}:$I$${sEnd},"${custNameEscaped}",'${sName}'!$J$${sStart}:$J$${sEnd})`);
-          }
-        }
-        if (adminEmpRefs.length > 0) {
-          r.getCell(10).value = { formula: adminEmpRefs.join('+') };
-        }
-        r.getCell(11).value = { formula: `I${r.number}*J${r.number}` };
-        monthlyAdminTotal += amount;
-        if (!adminStartRow) adminStartRow = r.number;
-        adminEndRow = r.number;
-      } else {
-        // place in hourly columns (A=1, B=2, C=3, D=4, E=5)
-        const r = monthlySheet.addRow(['', e.name, rate, round2(e.hours), ""]);
-        // Live formula: SUM hours across weekly sheets
-        if (sumFormula) {
-          r.getCell(4).value = { formula: sumFormula };
-        }
-        r.getCell(5).value = { formula: `C${r.number}*D${r.number}` };
+        rowVals[1] = hEmp.name;
+        rowVals[2] = rate;
+        rowVals[3] = round2(hEmp.hours);
         monthlyHourlyTotal += amount;
-        if (!hourlyStartRow) hourlyStartRow = r.number;
-        hourlyEndRow = r.number;
+        hasData = true;
+      }
+      
+      if (aEmp) {
+        const rate = getRate(aEmp.empId, cust.custId, aEmp.name);
+        const amount = round2(aEmp.hours * rate);
+        rowVals[7] = aEmp.name;
+        rowVals[8] = rate;
+        rowVals[9] = round2(aEmp.hours);
+        monthlyAdminTotal += amount;
+        hasData = true;
+      }
+      
+      if (hasData) {
+        const r = monthlySheet.addRow(rowVals);
+        
+        if (hEmp) {
+          if (!hourlyStartRow) hourlyStartRow = r.number;
+          hourlyEndRow = r.number;
+          
+          const posKey = `${cust.custId}::${hEmp.empId}`;
+          const weekRefs = weeklyTotals
+            .filter(w => w.cellPositions && w.cellPositions.has(posKey))
+            .map(w => {
+              const pos = w.cellPositions.get(posKey);
+              return `'${w.sheetName}'!${pos.col}${pos.row}`;
+            });
+          const sumFormula = weekRefs.length > 0 ? weekRefs.join('+') : null;
+          
+          if (sumFormula) {
+            r.getCell(4).value = { formula: sumFormula };
+          }
+          r.getCell(5).value = { formula: `C${r.number}*D${r.number}` };
+        }
+        
+        if (aEmp) {
+          if (!adminStartRow) adminStartRow = r.number;
+          adminEndRow = r.number;
+          
+          const custNameEscaped = (cust.name || '').replace(/"/g, '""');
+          const adminEmpRefs = [];
+          for (const wkStart of sortedWeeks) {
+            const weekMap = perWeekEmpSheetMap.get(wkStart);
+            const posMap = perWeekEmpPositions.get(wkStart);
+            if (weekMap && weekMap.has(aEmp.empId)) {
+              const sName = weekMap.get(aEmp.empId);
+              const pos = posMap ? posMap.get(aEmp.empId) : null;
+              const sStart = pos ? pos.summaryStart : 3;
+              const sEnd = pos ? pos.summaryEnd : 21;
+              adminEmpRefs.push(`SUMIF('${sName}'!$I$${sStart}:$I$${sEnd},"${custNameEscaped}",'${sName}'!$J$${sStart}:$J$${sEnd})`);
+            }
+          }
+          if (adminEmpRefs.length > 0) {
+            r.getCell(10).value = { formula: adminEmpRefs.join('+') };
+          }
+          r.getCell(11).value = { formula: `I${r.number}*J${r.number}` };
+        }
       }
     }
 
@@ -404,13 +443,16 @@ export async function generateMonthlyExport({ db, month, billingRates }) {
   }
 
   // Totals
+  // Setup the Subtotal formulas across all relevant customer blocks, skipping empty rows and headers
   const hourlySubtotalRow = monthlySheet.addRow(['Subtotal (Hourly)', '', '', 0, 0]);
-  hourlySubtotalRow.getCell(4).value = hourlyStartRow ? { formula: `SUM(D${hourlyStartRow}:D${hourlyEndRow})` } : 0;
-  hourlySubtotalRow.getCell(5).value = hourlyStartRow ? { formula: `SUM(E${hourlyStartRow}:E${hourlyEndRow})` } : 0;
+  // Use SUMIF to only sum rows that have a numeric value in column D (Hours) to avoid summing headers
+  hourlySubtotalRow.getCell(4).value = hourlyStartRow ? { formula: `SUMIF(C${hourlyStartRow}:C${hourlyEndRow},">0",D${hourlyStartRow}:D${hourlyEndRow})` } : 0;
+  hourlySubtotalRow.getCell(5).value = hourlyStartRow ? { formula: `SUMIF(C${hourlyStartRow}:C${hourlyEndRow},">0",E${hourlyStartRow}:E${hourlyEndRow})` } : 0;
   hourlySubtotalRow.font = { bold: true };
+  
   const adminSubtotalRow = monthlySheet.addRow(['Subtotal (Admin)', '', '', '', '', '', '', '', '', 0, 0]);
-  adminSubtotalRow.getCell(10).value = adminStartRow ? { formula: `SUM(J${adminStartRow}:J${adminEndRow})` } : 0;
-  adminSubtotalRow.getCell(11).value = adminStartRow ? { formula: `SUM(K${adminStartRow}:K${adminEndRow})` } : 0;
+  adminSubtotalRow.getCell(10).value = adminStartRow ? { formula: `SUMIF(I${adminStartRow}:I${adminEndRow},">0",J${adminStartRow}:J${adminEndRow})` } : 0;
+  adminSubtotalRow.getCell(11).value = adminStartRow ? { formula: `SUMIF(I${adminStartRow}:I${adminEndRow},">0",K${adminStartRow}:K${adminEndRow})` } : 0;
   adminSubtotalRow.font = { bold: true };
 
   // OT Premium row: sum OT from each weekly sheet

@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Labor Timekeeper - Admin</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <!-- Admin Secret Gate -->
@@ -24,7 +24,7 @@
       <h1>Admin</h1>
       <div style="display:flex; gap:8px; align-items:center;">
         <button id="toggleDevBtn" class="badge" type="button" style="display:none;">Show Sim Tools</button>
-        <a href="/app" class="badge">Employee view</a>
+        <a href="app" class="badge">Employee view</a>
       </div>
     </div>
 
@@ -60,6 +60,9 @@
         <div class="col">
           <label class="small muted">Payroll Week</label>
           <div id="reportWeekLabel" class="small muted"></div>
+          <div id="weeklyPayrollPolicy" class="small muted" style="margin-top:6px;">
+            Weekly payroll excludes admin roles.
+          </div>
         </div>
         <div class="col">
           <label class="small muted">Month</label>
@@ -71,9 +74,9 @@
         </div>
       </div>
       <div class="row" style="margin-top:12px; gap:8px;">
-        <button id="genMonthBtn" class="primary">🛠️ Download Monthly XLSX</button>
-        <button id="genBillingBtn" class="primary" style="background:#2d8a4e">💰 Download Billing Report</button>
-        <button onclick="printWeekTimesheets()" class="primary" style="background:#1a56db">🖨️ Print Week Timesheets</button>
+        <button id="genWeekBtn" class="primary">Download Weekly XLSX</button>
+        <button id="genAdminMonthBtn" class="primary" style="background:#2d8a4e">Download Monthly XLSX (Admin Only)</button>
+        <button onclick="printWeekTimesheets()" class="primary" style="background:#1a56db">🖨️ Print Payroll</button>
         <button id="previewMonthBtn" class="badge">📊 Preview Report</button>
       </div>
       <div id="devControls" style="display:none;">
@@ -110,16 +113,23 @@
 <script>
 const SECRET_KEY = 'labor_timekeeper_admin_secret';
 let ADMIN_SECRET = '';
+const BASE_PREFIX = location.pathname.startsWith('/staging/') ? '/staging' : '';
 const IS_PROD_HOST = location.hostname.endsWith('appspot.com');
 const FORCE_DEV = new URLSearchParams(location.search).get('dev') === '1';
 
 function el(id){ return document.getElementById(id); }
+function withBase(url){
+  if (!url) return url;
+  if (/^https?:\/\//i.test(url)) return url;
+  if (BASE_PREFIX && url.startsWith(`${BASE_PREFIX}/`)) return url;
+  return `${BASE_PREFIX}${url}`;
+}
 
 // Admin Secret Gate Logic
 async function verifySecret() {
   const input = el('secretInput').value;
   if (!input) return;
-  const r = await fetch('/api/admin/schema', {
+  const r = await fetch(withBase('/api/admin/schema'), {
     headers: { 'x-admin-secret': input }
   });
   if (r.ok) {
@@ -152,7 +162,7 @@ initSecretGate();
 async function api(url, opts){
   const headers = { ...(opts && opts.headers ? opts.headers : {}) };
   if (ADMIN_SECRET) headers['x-admin-secret'] = ADMIN_SECRET;
-  const r = await fetch(url, { ...(opts || {}), headers });
+  const r = await fetch(withBase(url), { ...(opts || {}), headers });
   const j = await r.json().catch(()=>null);
   if (!r.ok) throw new Error((j && j.error) || 'Request failed');
   return j;
@@ -264,19 +274,23 @@ async function init(){
   }
 
   // Report download buttons
-  el('genMonthBtn').onclick = downloadMonthly;
-  el('genBillingBtn').onclick = downloadBilling;
+  if (el('genWeekBtn')) el('genWeekBtn').onclick = downloadWeekly;
+  if (el('genAdminMonthBtn')) el('genAdminMonthBtn').onclick = downloadAdminMonthly;
   const previewBtn = el('previewMonthBtn'); if (previewBtn) previewBtn.onclick = previewReport;
   const seedBtn = el('seedWeeksBtn'); if (seedBtn) seedBtn.style.display = 'none';
   el('previewReconcileBtn').onclick = previewReconcile;
   el('closeMonthBtn').onclick = closeMonth;
 
-  // Default month values
-  const now = new Date();
-  const ym = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
-  CURRENT_MONTH = ym;
-  el('reportMonthLabel').textContent = ym;
-  el('closeMonth').value = ym;
+  // Default month: detect from payroll-weeks API (payroll month, not calendar month)
+  try {
+    const pw = await api('/api/payroll-weeks?_=' + Date.now());
+    CURRENT_MONTH = pw.month || `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
+  } catch (e) {
+    const now = new Date();
+    CURRENT_MONTH = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+  }
+  el('reportMonthLabel').textContent = CURRENT_MONTH;
+  el('closeMonth').value = CURRENT_MONTH;
   buildMonthOptions(CURRENT_MONTH);
   if (el('loadMonthBtn')) {
     el('loadMonthBtn').onclick = async () => {
@@ -329,22 +343,40 @@ async function seedSampleWeeks(){
 }
 
 // Report download functions
-async function downloadMonthly() {
-  const month = CURRENT_MONTH;
-  if (!month) { alert('Missing current month'); return; }
-  window.location.href = `/api/export/monthly?month=${encodeURIComponent(month)}`;
+async function downloadWeekly() {
+  const weekStart = el('weekSelect')?.value || CURRENT_WEEK_START;
+  if (!weekStart) { alert('Select a week first'); return; }
+  try {
+    const result = await api(`/api/admin/generate-week?week_start=${encodeURIComponent(weekStart)}`);
+    const file = (result.files || [])[0];
+    if (!file?.filename) throw new Error('No weekly workbook returned');
+    const month = weekStart.slice(0, 7);
+    const url = withBase(`/exports/${encodeURIComponent(month)}/${encodeURIComponent(weekStart)}/${encodeURIComponent(file.filename)}`);
+    window.location.href = url;
+  } catch (err) {
+    alert(`Weekly export failed: ${err.message}`);
+  }
 }
 
 function printWeekTimesheets() {
   const weekStart = el('weekSelect')?.value || CURRENT_WEEK_START;
   if (!weekStart) { alert('Select a week first'); return; }
-  window.open(`/api/admin/print-week?week_start=${encodeURIComponent(weekStart)}`, '_blank');
+  const qs = new URLSearchParams({ week_start: weekStart });
+  window.open(withBase(`/api/admin/print-week?${qs.toString()}`), '_blank');
+}
+
+function printWeekBilling() {
+  alert('Billing print preview is disabled.');
 }
 
 async function downloadBilling() {
+  alert('Billing report export is disabled.');
+}
+
+async function downloadAdminMonthly() {
   const month = CURRENT_MONTH;
   if (!month) { alert('Missing current month'); return; }
-  window.location.href = `/api/export/monthly-billing?month=${encodeURIComponent(month)}`;
+  window.location.href = withBase(`/api/export/monthly-admin?month=${encodeURIComponent(month)}`);
 }
 
 function fmtWeekLabel(ws) {
@@ -360,70 +392,65 @@ async function previewReport() {
   const preview = el('reportPreview');
   if (preview) {
     preview.style.display = 'block';
-    preview.innerHTML = '<div style="color:#aaa;">Loading preview...</div>';
+    preview.innerHTML = '<div style="color:#aaa;">Loading weekly preview...</div>';
   }
   try {
     const result = await api(`/api/admin/report-preview?month=${encodeURIComponent(month)}`);
     const byWeek = result.byWeek || [];
-    const commentRows = (result.comments || []).map(c => `<tr><td>${c.week_start}</td><td>${c.employee_name}</td><td>${c.comment || ''}</td></tr>`).join('');
 
-    // === Weekly Summaries (expanded by default) ===
     let weeklyHtml = '';
     if (byWeek.length === 0) {
-      weeklyHtml = '<p style="color:#aaa;">No approved entries for this month.</p>';
+      weeklyHtml = '<p style="color:#aaa;">No approved weekly crew entries for this month.</p>';
     }
+
     for (const wk of byWeek) {
       let custHtml = '';
       for (const c of wk.customers) {
-        const empList = c.employees.map(e => `<span style="margin-right:10px;">${e.employee_name} <b>${Number(e.hours).toFixed(1)}h</b></span>`).join('');
+        const empRows = c.employees.map(e => (
+          `<tr>
+            <td style="color:#ddd;">${e.employee_name}</td>
+            <td style="text-align:right; color:#ddd;">$${Number(e.rate || 0).toFixed(2)}</td>
+            <td style="text-align:right; color:#ddd;">${Number(e.hours).toFixed(2)}</td>
+            <td style="text-align:right; color:#ddd;">$${Number(e.billed).toFixed(2)}</td>
+          </tr>`
+        )).join('');
+
         custHtml += `
-          <div style="margin:6px 0; padding:6px 10px; background:rgba(255,255,255,0.05); border-radius:4px;">
+          <div style="margin:8px 0; padding:8px 10px; background:rgba(255,255,255,0.05); border-radius:4px;">
             <div style="display:flex; justify-content:space-between; align-items:center;">
               <strong style="color:#f0c040;">${c.customer}</strong>
               <span style="color:#aaa;">${Number(c.hours).toFixed(1)}h &nbsp; $${Number(c.billed).toFixed(2)}</span>
             </div>
-            <div style="margin-top:4px; font-size:0.85rem; color:#ccc;">${empList}</div>
+            <table style="width:100%; margin-top:6px;">
+              <thead>
+                <tr>
+                  <th style="text-align:left; color:#aaa;">Employee</th>
+                  <th style="text-align:right; color:#aaa;">Rate</th>
+                  <th style="text-align:right; color:#aaa;">Hours</th>
+                  <th style="text-align:right; color:#aaa;">Total</th>
+                </tr>
+              </thead>
+              <tbody>${empRows}</tbody>
+            </table>
           </div>`;
       }
+
       weeklyHtml += `
         <div style="margin-bottom:16px; border:1px solid rgba(255,255,255,0.1); border-radius:6px; padding:10px;">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-            <h3 style="margin:0; color:#5dade2;">📅 ${fmtWeekLabel(wk.weekStart)}</h3>
+            <h3 style="margin:0; color:#5dade2;">${fmtWeekLabel(wk.weekStart)}</h3>
             <span style="font-size:0.9rem; color:#eee;"><b>${Number(wk.hours).toFixed(1)}h</b> &nbsp; <b>$${Number(wk.billed).toFixed(2)}</b></span>
           </div>
+          <div style="font-size:0.82rem; color:#8ea0c4; margin-bottom:6px;">Sorted by rate: lowest to highest</div>
           ${custHtml}
         </div>`;
     }
 
-    // === Monthly Summary (collapsed by default) ===
-    const empRows = (result.employees || []).map(e => `<tr><td style="color:#ccc;">${e.employee_name}</td><td style="color:#eee;">${Number(e.hours).toFixed(2)}</td><td style="color:#eee;">$${Number(e.billed).toFixed(2)}</td></tr>`).join('');
-    const monthlyHtml = `
-      <details style="margin-top:16px; border:1px solid rgba(255,255,255,0.1); border-radius:6px; padding:8px;">
-        <summary style="cursor:pointer; font-size:1rem; font-weight:bold; color:#5dade2; padding:4px;">
-          📋 Monthly Summary — ${result.totals.entries} entries, ${Number(result.totals.hours).toFixed(2)}h, $${Number(result.totals.billed).toFixed(2)}
-        </summary>
-        <div style="margin-top:10px;">
-          <table style="width:100%;">
-            <thead><tr><th style="text-align:left; color:#aaa;">Employee</th><th style="text-align:left; color:#aaa;">Hours</th><th style="text-align:left; color:#aaa;">Billed</th></tr></thead>
-            <tbody>${empRows || '<tr><td colspan="3" style="color:#aaa;">No entries</td></tr>'}</tbody>
-          </table>
-        </div>
-        ${commentRows ? `
-          <div style="margin-top:10px;">
-            <div style="color:#aaa; font-size:0.85rem;">Weekly comments</div>
-            <table style="width:100%;">
-              <thead><tr><th style="text-align:left; color:#aaa;">Week</th><th style="text-align:left; color:#aaa;">Employee</th><th style="text-align:left; color:#aaa;">Comment</th></tr></thead>
-              <tbody>${commentRows}</tbody>
-            </table>
-          </div>
-        ` : ''}
-      </details>`;
-
     const html = `
-      <div style="color:#aaa; font-size:0.85rem; margin-bottom:8px;">Payroll Report Preview — ${result.month}</div>
+      <div style="color:#aaa; font-size:0.85rem; margin-bottom:8px;">Weekly Crew Preview - ${result.month}</div>
       ${weeklyHtml}
-      ${monthlyHtml}
     `;
+
     if (preview) preview.innerHTML = html;
   } catch (err) {
     if (preview) preview.innerHTML = `<div style="color:#e74c3c;">Error: ${err.message}</div>`;
@@ -441,14 +468,20 @@ async function previewReconcile() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ month, confirm: false })
     });
+    if (!result || result.entries === undefined) {
+      showPipelineResult(`⚠️ No data to reconcile for ${month}.\nAll entries may already be archived.`);
+      return;
+    }
     const output = [
       `📋 Reconciliation Preview for ${month}`,
       ``,
       `Entries to archive: ${result.entries}`,
       `Total Hours: ${result.totalHours}`,
-      `Total Billed: $${result.totalBilled}`,
+      `Total Billed: $${Number(result.totalBilled || 0).toFixed(2)}`,
       ``,
-      `Click "Reconcile & Clear" to archive and remove this data.`
+      result.entries > 0
+        ? `Click "Reconcile & Clear" to archive and remove this data.`
+        : `✅ Nothing to reconcile — all entries are already archived.`
     ].join('\n');
     showPipelineResult(output);
   } catch (err) {
@@ -470,16 +503,9 @@ async function closeMonth() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ month, confirm: true })
     });
-    const output = [
-      `✅ Payroll Reconciled for ${month}`,
-      ``,
-      `Archived: ${result.archived} entries`,
-      `Total Hours: ${result.summary.totalHours}`,
-      `Total Billed: $${result.summary.totalBilled}`,
-      ``,
-      `Data has been archived and cleared from active database.`
-    ].join('\n');
-    showPipelineResult(output);
+    // Silent success - just clear the preview
+    el('pipelineResult').style.display = 'none';
+    if (el('reportPreview')) el('reportPreview').style.display = 'none';
   } catch (err) {
     showPipelineResult(`❌ Error: ${err.message}`);
   }

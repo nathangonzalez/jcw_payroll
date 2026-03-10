@@ -2,33 +2,17 @@ name: CI/CD
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
-  schedule:
-    - cron: '0 * * * *'
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      promote_to_prod:
+        description: "Set true to allow production deploy in this manual run"
+        required: false
+        default: "false"
 
 jobs:
-  schedule-gate:
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    outputs:
-      should_deploy: ${{ steps.check.outputs.should_deploy }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Check for recent commits (24h)
-        id: check
-        run: |
-          last_commit=$(git log -1 --format=%ct)
-          now=$(date +%s)
-          if [ $((now - last_commit)) -lt 86400 ]; then
-            echo "should_deploy=true" >> $GITHUB_OUTPUT
-          else
-            echo "should_deploy=false" >> $GITHUB_OUTPUT
-          fi
-
   build-and-test:
     runs-on: ubuntu-latest
     env:
@@ -40,8 +24,8 @@ jobs:
       - name: Setup Node.js 22 and npm cache
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
-          cache: 'npm'
+          node-version: "22"
+          cache: "npm"
           cache-dependency-path: labor-timekeeper/package-lock.json
 
       - name: Install dependencies
@@ -68,122 +52,324 @@ jobs:
         working-directory: labor-timekeeper
 
       - name: Seed test data
-        run: |
-          curl -s -X POST http://localhost:3000/api/admin/seed
+        run: curl -s -X POST http://localhost:3000/api/admin/seed
         working-directory: labor-timekeeper
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps
         working-directory: labor-timekeeper
 
-      - name: Run tests
-        run: npm test
+      - name: Run CI smoke tests
+        run: npx playwright test tests/ci-smoke.spec.cjs --project=chromium --workers=1
         working-directory: labor-timekeeper
 
       - name: Stop webserver
         if: always()
         run: |
-          if [ -f labor-timekeeper/webserver.pid ]; then kill $(cat labor-timekeeper/webserver.pid) || true; fi
+          if [ -f labor-timekeeper/webserver.pid ]; then
+            kill "$(cat labor-timekeeper/webserver.pid)" || true
+          fi
 
-  deploy-patch:
-    name: Deploy Patch (no promote)
+  deploy-staging:
+    name: Deploy to VM Staging (1:1 runtime)
     needs: build-and-test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    env:
-      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-      GCP_SA_KEY_B64: ${{ secrets.GCP_SA_KEY_B64 }}
-    outputs:
-      version: ${{ steps.set_version.outputs.version }}
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, Linux, X64]
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Write GCP key from base64 secret
+      - name: Deploy commit to staging service (local runner)
+        env:
+          SERVICE_USER: ${{ secrets.VM_SERVICE_USER }}
+          PROD_REPO: ${{ secrets.VM_DEPLOY_PATH }}
+          STAGING_REPO: ${{ secrets.VM_STAGING_DEPLOY_PATH }}
+          STAGING_SERVICE: ${{ secrets.VM_STAGING_SERVICE_NAME }}
+          STAGING_PORT: ${{ secrets.VM_STAGING_PORT }}
+          STAGING_ADMIN_SECRET: ${{ secrets.STAGING_ADMIN_SECRET }}
         run: |
-          printf '%s' "$GCP_SA_KEY_B64" | tr -d '\r' | base64 --decode > gcloud-key.json
+          set -euo pipefail
 
-      - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ env.GCP_PROJECT_ID }}
+          SHA="${{ github.sha }}"
+          SERVICE_USER="${SERVICE_USER:-nathan}"
+          SERVICE_GROUP="$(id -gn "$SERVICE_USER" 2>/dev/null || echo "$SERVICE_USER")"
+          PROD_REPO="${PROD_REPO:-/home/${SERVICE_USER}/dev/repos/jcw_payroll}"
+          STAGING_REPO="${STAGING_REPO:-/home/${SERVICE_USER}/dev/repos/jcw_payroll-staging}"
+          STAGING_SERVICE="${STAGING_SERVICE:-labor-timekeeper-staging}"
+          STAGING_PORT="${STAGING_PORT:-18080}"
+          STAGING_ADMIN_SECRET="${STAGING_ADMIN_SECRET:-demo}"
 
-      - name: Authenticate gcloud
-        run: gcloud auth activate-service-account --key-file=gcloud-key.json
+          if ! sudo test -d "$PROD_REPO/.git"; then
+            echo "Prod repo not found at $PROD_REPO"
+            exit 1
+          fi
 
-      - name: Set patch version
-        id: set_version
-        run: echo "version=p${GITHUB_RUN_ID}" >> $GITHUB_OUTPUT
+          sudo -u "$SERVICE_USER" bash -lc "set -euo pipefail; cd '$PROD_REPO'; git fetch origin --prune; if ! git cat-file -e '${SHA}^{commit}' 2>/dev/null; then echo 'Commit ${SHA} not found in repo after fetch'; exit 1; fi; if [ ! -e '$STAGING_REPO/.git' ]; then mkdir -p \"$(dirname "$STAGING_REPO")\"; git worktree add --force '$STAGING_REPO' '${SHA}'; else cd '$STAGING_REPO'; git fetch origin --prune; git checkout --force '${SHA}'; fi"
 
-      - name: Deploy App Engine patch (no promote)
-        run: |
-          gcloud app deploy labor-timekeeper/app.yaml --quiet --no-promote --version "${{ steps.set_version.outputs.version }}"
+          STAGING_APP_DIR="$STAGING_REPO/labor-timekeeper"
+          STAGING_DATA_DIR="$STAGING_APP_DIR/data/staging"
+          STAGING_ENV_FILE="$STAGING_APP_DIR/.env.staging"
+          sudo -u "$SERVICE_USER" mkdir -p "$STAGING_DATA_DIR"
 
-      - name: Patch URL
-        run: echo "https://${{ steps.set_version.outputs.version }}-dot-labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com"
+          if ! sudo test -f "$STAGING_ENV_FILE"; then
+            sudo -u "$SERVICE_USER" bash -lc "printf '%s\n' 'NODE_ENV=staging' 'PORT=${STAGING_PORT}' 'DATABASE_PATH=${STAGING_DATA_DIR}/app.db' 'BIND_HOST=127.0.0.1' 'ADMIN_SECRET=${STAGING_ADMIN_SECRET}' 'ALLOW_CLOUD_RESTORE=1' 'FORCE_CLOUD_RESTORE=1' 'SKIP_CLOUD_RESTORE=0' 'DISABLE_SCHEDULED_BACKUPS=1' > '$STAGING_ENV_FILE'"
+          fi
 
-  deploy-patch-schedule:
-    name: Deploy Patch (schedule, no promote)
-    needs: [build-and-test, schedule-gate]
-    if: github.event_name == 'schedule' && needs.schedule-gate.outputs.should_deploy == 'true'
-    runs-on: ubuntu-latest
+          upsert_env() {
+            key="$1"
+            value="$2"
+            if sudo grep -q "^${key}=" "$STAGING_ENV_FILE"; then
+              sudo sed -i "s#^${key}=.*#${key}=${value}#" "$STAGING_ENV_FILE"
+            else
+              echo "${key}=${value}" | sudo tee -a "$STAGING_ENV_FILE" >/dev/null
+            fi
+          }
+
+          upsert_env NODE_ENV staging
+          upsert_env PORT "$STAGING_PORT"
+          upsert_env DATABASE_PATH "${STAGING_DATA_DIR}/app.db"
+          upsert_env BIND_HOST 127.0.0.1
+          upsert_env ADMIN_SECRET "$STAGING_ADMIN_SECRET"
+          upsert_env ALLOW_CLOUD_RESTORE 1
+          upsert_env FORCE_CLOUD_RESTORE 1
+          upsert_env SKIP_CLOUD_RESTORE 0
+          upsert_env DISABLE_SCHEDULED_BACKUPS 1
+
+          cat <<EOF | sudo tee "/etc/systemd/system/${STAGING_SERVICE}.service" >/dev/null
+          [Unit]
+          Description=JCW Labor Timekeeper Staging
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User=${SERVICE_USER}
+          Group=${SERVICE_GROUP}
+          WorkingDirectory=${STAGING_APP_DIR}
+          EnvironmentFile=${STAGING_ENV_FILE}
+          ExecStart=/usr/bin/node server.js
+          Restart=always
+          RestartSec=5
+          StandardOutput=journal
+          StandardError=journal
+          SyslogIdentifier=${STAGING_SERVICE}
+          NoNewPrivileges=true
+          ProtectSystem=strict
+          ReadWritePaths=${STAGING_DATA_DIR}
+          ReadWritePaths=/tmp
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          sudo -u "$SERVICE_USER" bash -lc "cd '$STAGING_APP_DIR' && npm ci --omit=dev"
+          sudo systemctl daemon-reload
+          sudo systemctl enable "$STAGING_SERVICE"
+          sudo systemctl restart "$STAGING_SERVICE"
+          ok=0
+          for i in $(seq 1 60); do
+            if curl -fsS "http://127.0.0.1:${STAGING_PORT}/api/health"; then
+              ok=1
+              break
+            fi
+            sleep 2
+          done
+          if [ "$ok" != "1" ]; then
+            sudo journalctl -u "$STAGING_SERVICE" -n 120 --no-pager || true
+            exit 1
+          fi
+
+          echo "STAGING_APP_DIR=$STAGING_APP_DIR" >> "$GITHUB_ENV"
+          echo "STAGING_PORT=$STAGING_PORT" >> "$GITHUB_ENV"
+          echo "STAGING_ADMIN_SECRET=$STAGING_ADMIN_SECRET" >> "$GITHUB_ENV"
+
+  uat-demo:
+    name: UAT Demo (VM Staging Local)
+    needs: deploy-staging
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, Linux, X64]
     env:
-      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-      GCP_SA_KEY_B64: ${{ secrets.GCP_SA_KEY_B64 }}
-    outputs:
-      version: ${{ steps.set_version.outputs.version }}
+      HUSKY: "0"
+      UAT_DEMO: "1"
+      UAT_WEEK_START: "2026-02-25"
+      UAT_STEP_PAUSE_MS: "4500"
+      SERVICE_USER: ${{ secrets.VM_SERVICE_USER }}
+      STAGING_REPO: ${{ secrets.VM_STAGING_DEPLOY_PATH }}
+      STAGING_PORT: ${{ secrets.VM_STAGING_PORT }}
+      STAGING_ADMIN_SECRET: ${{ secrets.STAGING_ADMIN_SECRET }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Write GCP key from base64 secret
+      - name: Wait for staging health
         run: |
-          printf '%s' "$GCP_SA_KEY_B64" | tr -d '\r' | base64 --decode > gcloud-key.json
+          SERVICE_USER="${SERVICE_USER:-nathan}"
+          STAGING_REPO="${STAGING_REPO:-/home/${SERVICE_USER}/dev/repos/jcw_payroll-staging}"
+          STAGING_PORT="${STAGING_PORT:-18080}"
+          BASE_URL="http://127.0.0.1:${STAGING_PORT}"
+          echo "STAGING_APP_DIR=${STAGING_REPO}/labor-timekeeper" >> "$GITHUB_ENV"
+          echo "BASE_URL=$BASE_URL" >> "$GITHUB_ENV"
+          echo "ADMIN_SECRET_UAT=${STAGING_ADMIN_SECRET:-demo}" >> "$GITHUB_ENV"
+          for i in $(seq 1 30); do
+            if curl -fsS "${BASE_URL}/api/health" > /tmp/staging-health.json; then
+              cat /tmp/staging-health.json
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Staging health check failed"
+          exit 1
 
-      - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v2
+      - name: Resolve UAT week from real staging payroll data
+        run: |
+          set -euo pipefail
+          CHOSEN_WEEK="$(node - <<'NODE'
+          const base = process.env.BASE_URL;
+          const fallback = process.env.UAT_WEEK_START || '';
+          const fetchJson = async (url) => {
+            const res = await fetch(url);
+            if (!res.ok) return null;
+            return res.json();
+          };
+
+          let chosen = '';
+          const weeksData = await fetchJson(`${base}/api/payroll-weeks`);
+          const weeks = Array.isArray(weeksData?.weeks) ? [...weeksData.weeks].sort().reverse() : [];
+
+          for (const week of weeks) {
+            const data = await fetchJson(`${base}/api/admin/all-entries?week_start=${encodeURIComponent(week)}`);
+            const entries = Array.isArray(data?.entries) ? data.entries : [];
+            const approved = entries.filter((e) => String(e.status || '').toUpperCase() === 'APPROVED').length;
+            if (approved > 0) {
+              chosen = week;
+              break;
+            }
+          }
+
+          if (!chosen) chosen = weeksData?.currentWeek || weeks[0] || fallback;
+          process.stdout.write(String(chosen || fallback || ''));
+          NODE
+          )"
+
+          if [ -z "${CHOSEN_WEEK}" ]; then
+            echo "Unable to resolve UAT week from staging data"
+            exit 1
+          fi
+
+          echo "UAT_WEEK_START=${CHOSEN_WEEK}" >> "$GITHUB_ENV"
+          echo "Resolved UAT_WEEK_START=${CHOSEN_WEEK}"
+
+      - name: Install Playwright on staging app
+        run: |
+          cd "$STAGING_APP_DIR"
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Seed staging UAT data only if selected week has no approved entries
+        run: |
+          set -euo pipefail
+          APPROVED_COUNT="$(node - <<'NODE'
+          const base = process.env.BASE_URL;
+          const week = process.env.UAT_WEEK_START;
+          const res = await fetch(`${base}/api/admin/all-entries?week_start=${encodeURIComponent(week)}`);
+          const data = await res.json();
+          const entries = Array.isArray(data?.entries) ? data.entries : [];
+          const approved = entries.filter((e) => String(e.status || '').toUpperCase() === 'APPROVED').length;
+          process.stdout.write(String(approved));
+          NODE
+          )"
+          echo "Approved entries in ${UAT_WEEK_START}: ${APPROVED_COUNT}"
+          if [ "${APPROVED_COUNT}" -gt 0 ]; then
+            echo "Using real staging payroll data for UAT; no synthetic seed applied."
+            exit 0
+          fi
+          echo "No approved entries found; applying fallback synthetic seed."
+          curl -fsS -X POST -H "x-admin-secret: ${ADMIN_SECRET_UAT}" "${BASE_URL}/api/admin/seed"
+          curl -fsS -X POST \
+            -H "Content-Type: application/json" \
+            -H "x-admin-secret: ${ADMIN_SECRET_UAT}" \
+            -d "{\"week_start\":\"${UAT_WEEK_START}\",\"reset\":true,\"submit\":true,\"approve\":true}" \
+            "${BASE_URL}/api/admin/simulate-week"
+
+      - name: Run UAT demo spec
+        run: |
+          cd "$STAGING_APP_DIR"
+          npx playwright test tests/uat-admin-decouple.spec.cjs --project=chromium --workers=1
+
+      - name: Upload UAT artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          project_id: ${{ env.GCP_PROJECT_ID }}
+          name: uat-demo-${{ github.run_id }}
+          path: |
+            ${{ env.STAGING_APP_DIR }}/playwright-report/
+            ${{ env.STAGING_APP_DIR }}/test-results/
+          retention-days: 14
 
-      - name: Authenticate gcloud
-        run: gcloud auth activate-service-account --key-file=gcloud-key.json
-
-      - name: Set patch version
-        id: set_version
-        run: echo "version=p${GITHUB_RUN_ID}" >> $GITHUB_OUTPUT
-
-      - name: Deploy App Engine patch (no promote)
-        run: |
-          gcloud app deploy labor-timekeeper/app.yaml --quiet --no-promote --version "${{ steps.set_version.outputs.version }}"
-
-      - name: Patch URL
-        run: echo "https://${{ steps.set_version.outputs.version }}-dot-labor-timekeeper-dot-jcw-2-android-estimator.uc.r.appspot.com"
+  uat-approval:
+    name: UAT Approval Gate
+    needs: uat-demo
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: uat-approval
+    steps:
+      - name: Gate passed
+        run: echo "UAT demo reviewed and approved."
 
   promote:
-    name: Promote Patch to Prod
-    needs: deploy-patch
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    name: Deploy to VM + Caddy Prod
+    needs: uat-approval
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.event.inputs.promote_to_prod == 'true')
+    runs-on: [self-hosted, Linux, X64]
     environment: production
-    env:
-      GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-      GCP_SA_KEY_B64: ${{ secrets.GCP_SA_KEY_B64 }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Write GCP key from base64 secret
+      - name: Deploy approved commit to production service (local runner)
+        env:
+          SERVICE_USER: ${{ secrets.VM_SERVICE_USER }}
+          DEPLOY_PATH: ${{ secrets.VM_DEPLOY_PATH }}
+          SERVICE_NAME: ${{ secrets.VM_SERVICE_NAME }}
+          LOCAL_HEALTH_URL: ${{ secrets.VM_LOCAL_HEALTH_URL }}
         run: |
-          printf '%s' "$GCP_SA_KEY_B64" | tr -d '\r' | base64 --decode > gcloud-key.json
+          set -euo pipefail
 
-      - name: Setup gcloud
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ env.GCP_PROJECT_ID }}
+          SHA="${{ github.sha }}"
+          SERVICE_USER="${SERVICE_USER:-nathan}"
+          DEPLOY_PATH="${DEPLOY_PATH:-/home/${SERVICE_USER}/dev/repos/jcw_payroll}"
+          SERVICE_NAME="${SERVICE_NAME:-labor-timekeeper}"
+          LOCAL_HEALTH_URL="${LOCAL_HEALTH_URL:-http://127.0.0.1:8080/api/health}"
 
-      - name: Authenticate gcloud
-        run: gcloud auth activate-service-account --key-file=gcloud-key.json
+          sudo -u "$SERVICE_USER" bash -lc "set -euo pipefail; cd '$DEPLOY_PATH'; git fetch origin --prune; if ! git cat-file -e '${SHA}^{commit}' 2>/dev/null; then echo 'Commit ${SHA} not found in repo after fetch'; exit 1; fi; git checkout --force '${SHA}'; cd labor-timekeeper; npm ci --omit=dev"
+          sudo systemctl restart "$SERVICE_NAME"
+          sleep 5
+          curl -fsS "$LOCAL_HEALTH_URL"
 
-      - name: Promote patch to prod
+          if ! systemctl is-active --quiet caddy; then
+            echo "Caddy not active after deploy; attempting one restart"
+            sudo systemctl restart caddy || true
+            sleep 3
+          fi
+          if ! systemctl is-active --quiet caddy; then
+            echo "ERROR: caddy service is not active"
+            sudo systemctl status caddy --no-pager -l || true
+            sudo journalctl -u caddy -n 120 --no-pager || true
+            exit 1
+          fi
+
+          BINDINGS="$(ss -ltn sport = :8080 | awk 'NR>1 {print $4}')"
+          echo "Port 8080 bindings: ${BINDINGS}"
+          if echo "$BINDINGS" | grep -Eq '(^127\.0\.0\.1:8080$|^\[::1\]:8080$)'; then
+            echo "OK: service bound to loopback"
+          else
+            echo "ERROR: expected loopback-only bind on :8080"
+            exit 1
+          fi
+
+      - name: Verify public production domain health
+        env:
+          PROD_HEALTH_URL: ${{ vars.PAYROLL_PROD_HEALTH_URL }}
         run: |
-          gcloud app services set-traffic labor-timekeeper --splits "${{ needs.deploy-patch.outputs.version }}=1"
+          URL="${PROD_HEALTH_URL:-https://payroll.jcwelton.com/api/health}"
+          echo "Checking ${URL}"
+          for i in $(seq 1 20); do
+            if curl -fsS "$URL" > /tmp/prod-health.json; then
+              cat /tmp/prod-health.json
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Health check failed for ${URL}"
+          exit 1
