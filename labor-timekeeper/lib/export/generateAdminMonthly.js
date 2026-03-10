@@ -191,6 +191,8 @@ export async function generateAdminMonthlyExport({ db, month }) {
 
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet("Admin Monthly");
+  ws.properties.defaultRowHeight = 18;
+  ws.views = [{ state: "frozen", ySplit: 2 }];
 
   ws.columns = [
     { width: 34 }, // Client
@@ -201,10 +203,6 @@ export async function generateAdminMonthlyExport({ db, month }) {
     { width: 9 },  // CZ Rate
     { width: 16 }, // CZ Amount
   ];
-
-  ws.getCell("A1").value = `${month} Admin Billing`;
-  ws.getCell("A1").font = { bold: true, size: 13 };
-  ws.mergeCells("A1:G1");
 
   ws.getRow(2).values = [
     "Client",
@@ -226,6 +224,19 @@ export async function generateAdminMonthlyExport({ db, month }) {
   headerRow.getCell(5).font = { bold: true, color: { argb: "FF2E7D32" } };
   headerRow.getCell(6).font = { bold: true, color: { argb: "FF2E7D32" } };
   headerRow.getCell(7).font = { bold: true, color: { argb: "FF2E7D32" } };
+  headerRow.eachCell((cell) => {
+    cell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFECEFF1" },
+    };
+    cell.border = {
+      top: { style: "thin", color: { argb: "FF666666" } },
+      left: { style: "thin", color: { argb: "FF666666" } },
+      bottom: { style: "thin", color: { argb: "FF666666" } },
+      right: { style: "thin", color: { argb: "FF666666" } },
+    };
+  });
 
   let grandCjHours = 0;
   let grandCzHours = 0;
@@ -249,6 +260,14 @@ export async function generateAdminMonthlyExport({ db, month }) {
     ws.getCell(`F${rowNo}`).font = { color: { argb: "FF2E7D32" } };
     ws.getCell(`G${rowNo}`).font = { color: { argb: "FF2E7D32" } };
 
+    for (let c = 1; c <= 7; c += 1) {
+      ws.getCell(rowNo, c).fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFF5F5F5" },
+      };
+    }
+
     grandCjHours += Number(row.cjHours || 0);
     grandCzHours += Number(row.czHours || 0);
     grandCjAmount += Number(row.cjAmount || 0);
@@ -263,6 +282,13 @@ export async function generateAdminMonthlyExport({ db, month }) {
   ws.getCell(`E${totalRowNo}`).value = round2(grandCzHours);
   ws.getCell(`G${totalRowNo}`).value = round2(grandCzAmount);
   ws.getRow(totalRowNo).font = { bold: true };
+  for (let c = 1; c <= 7; c += 1) {
+    ws.getCell(totalRowNo, c).fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFF0F0F0" },
+    };
+  }
 
   const footerNote = month === "2026-01"
     ? "*Chris Z was off Jan 1st, 2nd, 16th -4 hours half day"
@@ -281,15 +307,21 @@ export async function generateAdminMonthlyExport({ db, month }) {
         bottom: { style: "thin", color: { argb: "FF9E9E9E" } },
         right: { style: "thin", color: { argb: "FF9E9E9E" } },
       };
-      if (c !== 1) ws.getCell(r, c).alignment = { horizontal: "right" };
+      if (c === 2 || c === 3 || c === 5 || c === 6) {
+        ws.getCell(r, c).alignment = { horizontal: "center" };
+      } else if (c !== 1) {
+        ws.getCell(r, c).alignment = { horizontal: "right" };
+      }
     }
   }
 
-  ws.getCell(`A${totalRowNo}`).border = { top: { style: "double", color: { argb: "FF000000" } } };
-  ws.getCell(`B${totalRowNo}`).border = { top: { style: "double", color: { argb: "FF000000" } } };
-  ws.getCell(`D${totalRowNo}`).border = { top: { style: "double", color: { argb: "FF000000" } } };
-  ws.getCell(`E${totalRowNo}`).border = { top: { style: "double", color: { argb: "FF000000" } } };
-  ws.getCell(`G${totalRowNo}`).border = { top: { style: "double", color: { argb: "FF000000" } } };
+  for (let c = 1; c <= 7; c += 1) {
+    const cell = ws.getCell(totalRowNo, c);
+    cell.border = {
+      ...cell.border,
+      top: { style: "double", color: { argb: "FF000000" } },
+    };
+  }
 
   for (let i = 3; i <= totalRowNo; i += 1) {
     ws.getCell(`B${i}`).numFmt = '0.0;[Red]-0.0;""';
@@ -304,7 +336,6 @@ export async function generateAdminMonthlyExport({ db, month }) {
   ws.getCell(`D${totalRowNo}`).numFmt = '"$"#,##0.00';
   ws.getCell(`E${totalRowNo}`).numFmt = "0.0";
   ws.getCell(`G${totalRowNo}`).numFmt = '"$"#,##0.00';
-  ws.views = [{ state: "frozen", ySplit: 2 }];
 
   const outputDir = getOutputDir(month);
   const filename = `Admin_Monthly_${month}.xlsx`;
