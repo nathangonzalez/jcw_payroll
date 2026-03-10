@@ -214,14 +214,70 @@ jobs:
           echo "Staging health check failed"
           exit 1
 
+      - name: Resolve UAT week from real staging payroll data
+        run: |
+          set -euo pipefail
+          CHOSEN_WEEK="$(node - <<'NODE'
+          const base = process.env.BASE_URL;
+          const fallback = process.env.UAT_WEEK_START || '';
+          const fetchJson = async (url) => {
+            const res = await fetch(url);
+            if (!res.ok) return null;
+            return res.json();
+          };
+
+          let chosen = '';
+          const weeksData = await fetchJson(`${base}/api/payroll-weeks`);
+          const weeks = Array.isArray(weeksData?.weeks) ? [...weeksData.weeks].sort().reverse() : [];
+
+          for (const week of weeks) {
+            const data = await fetchJson(`${base}/api/admin/all-entries?week_start=${encodeURIComponent(week)}`);
+            const entries = Array.isArray(data?.entries) ? data.entries : [];
+            const approved = entries.filter((e) => String(e.status || '').toUpperCase() === 'APPROVED').length;
+            if (approved > 0) {
+              chosen = week;
+              break;
+            }
+          }
+
+          if (!chosen) chosen = weeksData?.currentWeek || weeks[0] || fallback;
+          process.stdout.write(String(chosen || fallback || ''));
+          NODE
+          )"
+
+          if [ -z "${CHOSEN_WEEK}" ]; then
+            echo "Unable to resolve UAT week from staging data"
+            exit 1
+          fi
+
+          echo "UAT_WEEK_START=${CHOSEN_WEEK}" >> "$GITHUB_ENV"
+          echo "Resolved UAT_WEEK_START=${CHOSEN_WEEK}"
+
       - name: Install Playwright on staging app
         run: |
           cd "$STAGING_APP_DIR"
           npm ci
           npx playwright install --with-deps chromium
 
-      - name: Seed staging UAT data
+      - name: Seed staging UAT data only if selected week has no approved entries
         run: |
+          set -euo pipefail
+          APPROVED_COUNT="$(node - <<'NODE'
+          const base = process.env.BASE_URL;
+          const week = process.env.UAT_WEEK_START;
+          const res = await fetch(`${base}/api/admin/all-entries?week_start=${encodeURIComponent(week)}`);
+          const data = await res.json();
+          const entries = Array.isArray(data?.entries) ? data.entries : [];
+          const approved = entries.filter((e) => String(e.status || '').toUpperCase() === 'APPROVED').length;
+          process.stdout.write(String(approved));
+          NODE
+          )"
+          echo "Approved entries in ${UAT_WEEK_START}: ${APPROVED_COUNT}"
+          if [ "${APPROVED_COUNT}" -gt 0 ]; then
+            echo "Using real staging payroll data for UAT; no synthetic seed applied."
+            exit 0
+          fi
+          echo "No approved entries found; applying fallback synthetic seed."
           curl -fsS -X POST -H "x-admin-secret: ${ADMIN_SECRET_UAT}" "${BASE_URL}/api/admin/seed"
           curl -fsS -X POST \
             -H "Content-Type: application/json" \

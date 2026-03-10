@@ -248,10 +248,16 @@ export async function generateAdminMonthlyExport({ db, month }) {
     ws.getCell(`A${rowNo}`).value = row.customer;
     ws.getCell(`B${rowNo}`).value = row.cjHours || "";
     ws.getCell(`C${rowNo}`).value = row.cjRate || "";
-    ws.getCell(`D${rowNo}`).value = row.cjAmount || "";
+    ws.getCell(`D${rowNo}`).value = {
+      formula: `IF(OR(B${rowNo}="",C${rowNo}=""),"",B${rowNo}*C${rowNo})`,
+      result: row.cjAmount || 0,
+    };
     ws.getCell(`E${rowNo}`).value = row.czHours || "";
     ws.getCell(`F${rowNo}`).value = row.czRate || "";
-    ws.getCell(`G${rowNo}`).value = row.czAmount || "";
+    ws.getCell(`G${rowNo}`).value = {
+      formula: `IF(OR(E${rowNo}="",F${rowNo}=""),"",E${rowNo}*F${rowNo})`,
+      result: row.czAmount || 0,
+    };
 
     ws.getCell(`B${rowNo}`).font = { color: { argb: "FF1F4E79" } };
     ws.getCell(`C${rowNo}`).font = { color: { argb: "FF1F4E79" } };
@@ -277,10 +283,10 @@ export async function generateAdminMonthlyExport({ db, month }) {
 
   const totalRowNo = rowNo;
   ws.getCell(`A${totalRowNo}`).value = "TOTAL:";
-  ws.getCell(`B${totalRowNo}`).value = round2(grandCjHours);
-  ws.getCell(`D${totalRowNo}`).value = round2(grandCjAmount);
-  ws.getCell(`E${totalRowNo}`).value = round2(grandCzHours);
-  ws.getCell(`G${totalRowNo}`).value = round2(grandCzAmount);
+  ws.getCell(`B${totalRowNo}`).value = { formula: `SUM(B3:B${totalRowNo - 1})`, result: round2(grandCjHours) };
+  ws.getCell(`D${totalRowNo}`).value = { formula: `SUM(D3:D${totalRowNo - 1})`, result: round2(grandCjAmount) };
+  ws.getCell(`E${totalRowNo}`).value = { formula: `SUM(E3:E${totalRowNo - 1})`, result: round2(grandCzHours) };
+  ws.getCell(`G${totalRowNo}`).value = { formula: `SUM(G3:G${totalRowNo - 1})`, result: round2(grandCzAmount) };
   ws.getRow(totalRowNo).font = { bold: true };
   for (let c = 1; c <= 7; c += 1) {
     ws.getCell(totalRowNo, c).fill = {
