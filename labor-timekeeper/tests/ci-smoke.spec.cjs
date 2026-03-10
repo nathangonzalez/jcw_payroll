@@ -18,6 +18,17 @@ test.describe("CI Smoke", () => {
     expect(body.length).toBeGreaterThan(0);
   });
 
+  test("customers endpoint exposes merged JCW Shop/Office option", async ({ request }) => {
+    const res = await request.get(`${BASE}/api/customers`);
+    expect(res.ok()).toBeTruthy();
+    const body = await res.json();
+    const names = (Array.isArray(body) ? body : []).map((c) => String(c.name || ""));
+    expect(names).toContain("JCW Shop/Office");
+    expect(names).not.toContain("JCW");
+    expect(names).not.toContain("Shop");
+    expect(names).not.toContain("Office");
+  });
+
   test("app page loads with employee selector", async ({ page }) => {
     await page.goto(`${BASE}/app`, { waitUntil: "domcontentloaded" });
     await expect(page.locator("#employee")).toBeVisible();
