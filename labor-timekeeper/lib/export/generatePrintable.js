@@ -205,75 +205,13 @@ function isLunch(e) {
   return (e.customer_name || '').toLowerCase() === 'lunch' || (e.notes || '').toLowerCase().includes('lunch');
 }
 
-function parseTimeToHours(t) {
-  if (!t || typeof t !== 'string') return null;
-  const [hStr, mStr] = t.split(':');
-  const h = Number(hStr);
-  const m = Number(mStr);
-  if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
-  return h + (m / 60);
-}
-
 function applyLunchNetHours(entries) {
   for (const e of entries) {
     const raw = Number(e.hours || 0);
     e.raw_hours = raw;
+    // Lunch is entered as its own row by crews.
+    // Keep work rows exactly as entered and only zero lunch rows so payroll/overtime excludes lunch once.
     if (isLunch(e)) e.hours = 0;
-  }
-
-  const byDate = new Map();
-  for (const e of entries) {
-    if (!byDate.has(e.work_date)) byDate.set(e.work_date, []);
-    byDate.get(e.work_date).push(e);
-  }
-
-  for (const dayEntries of byDate.values()) {
-    const lunchEntry = dayEntries.find(isLunch);
-    const lunchHours = lunchEntry ? Number(lunchEntry.raw_hours || 0) : 0;
-    if (!lunchHours) continue;
-
-    const lunchStart = lunchEntry ? parseTimeToHours(lunchEntry.start_time) : null;
-    const lunchEnd = lunchEntry ? parseTimeToHours(lunchEntry.end_time) : null;
-    const workEntries = dayEntries.filter((e) => !isLunch(e));
-    const ordered = [...workEntries].sort((a, b) => {
-      const aStart = parseTimeToHours(a.start_time);
-      const bStart = parseTimeToHours(b.start_time);
-      if (aStart != null && bStart != null) return aStart - bStart;
-      if (aStart != null) return -1;
-      if (bStart != null) return 1;
-      return 0;
-    });
-
-    if (!ordered.length) continue;
-
-    let lunchApplied = false;
-    if (lunchStart == null && lunchEnd == null) {
-      const first = ordered[0];
-      first.hours = Math.max(0, round2(Number(first.raw_hours || 0) - lunchHours));
-      lunchApplied = true;
-    }
-
-    for (let i = 0; i < ordered.length; i += 1) {
-      const entry = ordered[i];
-      let netHours = Number(entry.raw_hours || 0);
-      const timeStart = parseTimeToHours(entry.start_time);
-      const timeOut = parseTimeToHours(entry.end_time);
-      const spansLunch = (
-        lunchStart != null &&
-        lunchEnd != null &&
-        timeStart != null &&
-        timeOut != null &&
-        timeStart <= lunchStart &&
-        timeOut >= lunchEnd
-      );
-      const afterLunch = lunchStart != null && timeStart != null && timeStart >= lunchStart;
-      const applyLunch = !lunchApplied && (spansLunch || afterLunch || (lunchStart == null && timeStart != null && timeStart >= 12) || i === ordered.length - 1);
-      if (applyLunch) {
-        netHours = Math.max(0, round2(netHours - lunchHours));
-        lunchApplied = true;
-      }
-      entry.hours = netHours;
-    }
   }
 
   return entries;
