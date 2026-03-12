@@ -427,9 +427,38 @@ function applyLunchNetHours(rows) {
   for (const row of rows) {
     row.raw_hours = Number(row.hours || 0);
     row.hours = Number(row.hours || 0);
-    // Lunch is tracked as its own row in JCW workflows.
-    // Do not net lunch again from a work row, otherwise totals are under-reported.
-    if (isLunchEntry(row)) row.hours = 0;
+  }
+
+  const byDate = groupByDate(rows);
+  for (const dayRows of byDate.values()) {
+    const sorted = [...dayRows].sort((a, b) => {
+      const aStart = parseTimeToHours(a.start_time);
+      const bStart = parseTimeToHours(b.start_time);
+      if (aStart != null && bStart != null) return aStart - bStart;
+      if (aStart != null) return -1;
+      if (bStart != null) return 1;
+      return String(a.customer_name || "").localeCompare(String(b.customer_name || ""));
+    });
+
+    const lunchHours = sorted
+      .filter(isLunchEntry)
+      .reduce((sum, row) => sum + Number(row.raw_hours || 0), 0);
+
+    for (const row of sorted) {
+      if (isLunchEntry(row)) row.hours = 0;
+    }
+
+    if (lunchHours <= 0) continue;
+
+    const workRows = sorted.filter((row) => !isLunchEntry(row));
+    if (!workRows.length) continue;
+
+    const preferred = workRows.find((row) => {
+      const start = parseTimeToHours(row.start_time);
+      return start != null && start >= 12;
+    }) || workRows[0];
+
+    preferred.hours = Math.max(0, round2(Number(preferred.hours || 0) - lunchHours));
   }
 
   return rows;

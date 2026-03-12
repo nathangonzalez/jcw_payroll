@@ -40,7 +40,7 @@ test.describe("CI Smoke", () => {
     await expect(page.locator("#secretInput")).toBeVisible();
   });
 
-  test("payroll print does not double-subtract lunch rows", async ({ request }) => {
+  test("payroll print nets lunch rows per day", async ({ request }) => {
     const future = new Date(Date.now() + (1000 * 60 * 60 * 24 * 365 * 20) + Math.floor(Math.random() * 1000) * 86400000);
     const weekStart = future.toISOString().slice(0, 10);
     const plusOne = new Date(future.getTime() + 86400000).toISOString().slice(0, 10);
@@ -105,7 +105,7 @@ test.describe("CI Smoke", () => {
     const totalMatch = targetSection.match(/<tr class="grand-total">[\s\S]*?<td class="num">([0-9.]+)<\/td>/);
     expect(totalMatch).toBeTruthy();
     const printedTotal = Number(totalMatch[1]);
-    expect(printedTotal).toBeCloseTo(16, 5);
+    expect(printedTotal).toBeCloseTo(15, 5);
   });
 
   test("weekly export workbook includes formulas (not static totals)", async ({ request }) => {
