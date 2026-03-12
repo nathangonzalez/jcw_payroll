@@ -17,6 +17,20 @@ export async function migrate(db) {
   await seedClientBillRates(db);
   await ensureAdminCustomerRateOverrides(db);
   await mergeJcwOfficeShopCustomer(db);
+  await mergeCustomerAliases(db, 'Ueltschi', [
+    'Ueltschi',
+    'Ultchei',
+    'Ueltchi',
+    'Ueltschii',
+    'Ueltschi ',
+  ]);
+  await mergeCustomerAliases(db, 'Tubergen', [
+    'Tubergen',
+    'Tubergen\'s',
+    'Tubergan',
+    'Tuburgen',
+    'Tubergen ',
+  ]);
 
   // Ensure weekly comments table exists
   db.exec(`
@@ -147,6 +161,75 @@ async function mergeJcwOfficeShopCustomer(db) {
     console.log(`[migrate] Merged JCW/Office/Shop into "${CANONICAL_NAME}"`);
   } catch (e) {
     console.error('[migrate] mergeJcwOfficeShopCustomer failed:', String(e));
+  }
+}
+
+async function mergeCustomerAliases(db, canonicalName, aliases) {
+  const canonicalKey = normalizeCustomerKey(canonicalName);
+  const aliasKeys = new Set((aliases || []).map((name) => normalizeCustomerKey(name)));
+  aliasKeys.add(canonicalKey);
+
+  try {
+    const rows = db.prepare('SELECT id, name, address FROM customers').all();
+    const candidates = rows.filter((r) => aliasKeys.has(normalizeCustomerKey(r.name)));
+    if (candidates.length <= 1) {
+      if (candidates.length === 1) {
+        db.prepare('UPDATE customers SET name = ? WHERE id = ?').run(canonicalName, candidates[0].id);
+      }
+      return;
+    }
+
+    let canonical = candidates.find((r) => normalizeCustomerKey(r.name) === canonicalKey) || candidates[0];
+    const addressFallback = candidates.find((r) => String(r.address || '').trim())?.address || '';
+
+    const tx = db.transaction(() => {
+      db.prepare('UPDATE customers SET name = ?, address = COALESCE(NULLIF(address, \'\'), ?) WHERE id = ?')
+        .run(canonicalName, addressFallback, canonical.id);
+
+      const selectAliasOverrides = db.prepare(`
+        SELECT id, employee_id, bill_rate
+        FROM rate_overrides
+        WHERE customer_id = ?
+      `);
+      const findCanonicalOverride = db.prepare(`
+        SELECT id, bill_rate
+        FROM rate_overrides
+        WHERE employee_id = ? AND customer_id = ?
+      `);
+      const updateOverrideCustomer = db.prepare('UPDATE rate_overrides SET customer_id = ? WHERE id = ?');
+      const updateCanonicalRate = db.prepare('UPDATE rate_overrides SET bill_rate = ? WHERE id = ?');
+      const deleteOverride = db.prepare('DELETE FROM rate_overrides WHERE id = ?');
+      const moveTimeEntries = db.prepare('UPDATE time_entries SET customer_id = ? WHERE customer_id = ?');
+      const deleteCustomer = db.prepare('DELETE FROM customers WHERE id = ?');
+
+      for (const row of candidates) {
+        if (row.id === canonical.id) continue;
+
+        moveTimeEntries.run(canonical.id, row.id);
+
+        const aliasOverrides = selectAliasOverrides.all(row.id);
+        for (const override of aliasOverrides) {
+          const existing = findCanonicalOverride.get(override.employee_id, canonical.id);
+          if (!existing) {
+            updateOverrideCustomer.run(canonical.id, override.id);
+            continue;
+          }
+          const canonicalRate = Number(existing.bill_rate || 0);
+          const aliasRate = Number(override.bill_rate || 0);
+          if ((canonicalRate === 0 || canonicalRate === 100) && aliasRate > 0 && aliasRate !== canonicalRate) {
+            updateCanonicalRate.run(aliasRate, existing.id);
+          }
+          deleteOverride.run(override.id);
+        }
+
+        deleteCustomer.run(row.id);
+      }
+    });
+
+    tx();
+    console.log(`[migrate] Merged customer aliases into "${canonicalName}"`);
+  } catch (e) {
+    console.error(`[migrate] mergeCustomerAliases failed for ${canonicalName}:`, String(e));
   }
 }
 
