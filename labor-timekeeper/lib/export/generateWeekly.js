@@ -165,6 +165,7 @@ function writeTimecardsSheet({ ws, db, employeesOrdered, weekLabel }) {
   for (const emp of employeesOrdered) {
     const adjustedEntries = applyLunchNetHours(emp.entries.map((entry) => ({ ...entry })));
     const dayMap = groupByDate(adjustedEntries);
+    const dayTotalRefs = [];
 
     ws.getCell(`A${rowNum}`).value = `Employee: ${emp.name}`;
     ws.getCell(`A${rowNum}`).font = { bold: true, size: 12 };
@@ -191,6 +192,7 @@ function writeTimecardsSheet({ ws, db, employeesOrdered, weekLabel }) {
       const workRows = rows.filter((row) => !isLunchEntry(row));
       if (!workRows.length) continue;
 
+      const dayDataStartRow = rowNum;
       let dayHours = 0;
       for (let i = 0; i < workRows.length; i += 1) {
         const row = workRows[i];
@@ -233,11 +235,20 @@ function writeTimecardsSheet({ ws, db, employeesOrdered, weekLabel }) {
       const dayTotalRow = ws.getRow(rowNum);
       dayTotalRow.getCell(5).value = "Day Total:";
       dayTotalRow.getCell(5).font = { bold: true };
-      dayTotalRow.getCell(6).value = round2(dayHours);
+      const dayDataEndRow = rowNum - 1;
+      if (dayDataEndRow >= dayDataStartRow) {
+        dayTotalRow.getCell(6).value = {
+          formula: `SUM(F${dayDataStartRow}:F${dayDataEndRow})`,
+          result: round2(dayHours),
+        };
+      } else {
+        dayTotalRow.getCell(6).value = round2(dayHours);
+      }
       dayTotalRow.getCell(6).font = { bold: true };
       dayTotalRow.getCell(6).numFmt = "0.00";
       dayTotalRow.getCell(5).border = topBorder();
       dayTotalRow.getCell(6).border = topBorder();
+      dayTotalRefs.push(`F${rowNum}`);
       rowNum += 1;
     }
 
@@ -252,7 +263,14 @@ function writeTimecardsSheet({ ws, db, employeesOrdered, weekLabel }) {
     const empTotalRow = ws.getRow(rowNum);
     empTotalRow.getCell(5).value = "Employee Total:";
     empTotalRow.getCell(5).font = { bold: true };
-    empTotalRow.getCell(6).value = round2(employeeHours);
+    if (dayTotalRefs.length > 0) {
+      empTotalRow.getCell(6).value = {
+        formula: `SUM(${dayTotalRefs.join(",")})`,
+        result: round2(employeeHours),
+      };
+    } else {
+      empTotalRow.getCell(6).value = round2(employeeHours);
+    }
     empTotalRow.getCell(6).font = { bold: true };
     empTotalRow.getCell(6).numFmt = "0.00";
     empTotalRow.getCell(5).border = doubleTopBorder();
@@ -307,33 +325,48 @@ function writeSummarySheet({ ws, summaryRows, weekLabel }) {
 
   let rowNum = 5;
   let currentCustomer = null;
+  let customerStartRow = null;
   let customerHours = 0;
   let customerTotal = 0;
   let grandHours = 0;
   let grandTotal = 0;
+  const subtotalHourRefs = [];
+  const subtotalTotalRefs = [];
 
   const flushCustomerSubtotal = () => {
-    if (!currentCustomer) return;
+    if (!currentCustomer || customerStartRow == null) return;
+    const customerEndRow = rowNum - 1;
+    if (customerEndRow < customerStartRow) return;
     const subtotalRow = ws.getRow(rowNum);
     subtotalRow.getCell(2).value = "Customer Subtotal:";
     subtotalRow.getCell(2).font = { bold: true };
-    subtotalRow.getCell(4).value = round2(customerHours);
+    subtotalRow.getCell(4).value = {
+      formula: `SUM(D${customerStartRow}:D${customerEndRow})`,
+      result: round2(customerHours),
+    };
     subtotalRow.getCell(4).font = { bold: true };
-    subtotalRow.getCell(5).value = round2(customerTotal);
+    subtotalRow.getCell(5).value = {
+      formula: `SUM(E${customerStartRow}:E${customerEndRow})`,
+      result: round2(customerTotal),
+    };
     subtotalRow.getCell(5).font = { bold: true };
     subtotalRow.getCell(4).numFmt = "0.00";
     subtotalRow.getCell(5).numFmt = '"$"#,##0.00';
     subtotalRow.getCell(4).border = topBorder();
     subtotalRow.getCell(5).border = topBorder();
+    subtotalHourRefs.push(`D${rowNum}`);
+    subtotalTotalRefs.push(`E${rowNum}`);
     rowNum += 2;
     customerHours = 0;
     customerTotal = 0;
+    customerStartRow = null;
   };
 
   for (const row of ordered) {
     if (currentCustomer !== row.customer) {
       flushCustomerSubtotal();
       currentCustomer = row.customer;
+      customerStartRow = rowNum;
     }
 
     const excelRow = ws.getRow(rowNum);
@@ -341,7 +374,10 @@ function writeSummarySheet({ ws, summaryRows, weekLabel }) {
     excelRow.getCell(2).value = row.employee;
     excelRow.getCell(3).value = round2(row.rate);
     excelRow.getCell(4).value = round2(row.hours);
-    excelRow.getCell(5).value = round2(row.total);
+    excelRow.getCell(5).value = {
+      formula: `C${rowNum}*D${rowNum}`,
+      result: round2(row.total),
+    };
     applyDataRowStyle(excelRow, [1, 2, 3, 4, 5]);
     excelRow.getCell(3).numFmt = '"$"#,##0.00';
     excelRow.getCell(4).numFmt = "0.00";
@@ -360,9 +396,13 @@ function writeSummarySheet({ ws, summaryRows, weekLabel }) {
   const grandRow = ws.getRow(rowNum);
   grandRow.getCell(1).value = "WEEK TOTAL";
   grandRow.getCell(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
-  grandRow.getCell(4).value = round2(grandHours);
+  grandRow.getCell(4).value = subtotalHourRefs.length > 0
+    ? { formula: `SUM(${subtotalHourRefs.join(",")})`, result: round2(grandHours) }
+    : round2(grandHours);
   grandRow.getCell(4).font = { bold: true, color: { argb: "FFFFFFFF" } };
-  grandRow.getCell(5).value = round2(grandTotal);
+  grandRow.getCell(5).value = subtotalTotalRefs.length > 0
+    ? { formula: `SUM(${subtotalTotalRefs.join(",")})`, result: round2(grandTotal) }
+    : round2(grandTotal);
   grandRow.getCell(5).font = { bold: true, color: { argb: "FFFFFFFF" } };
   grandRow.getCell(4).numFmt = "0.00";
   grandRow.getCell(5).numFmt = '"$"#,##0.00';
